@@ -10,6 +10,7 @@ import { useBootGate } from '@/infrastructure/bootstrap';
 import { Button, Card } from '@/components/ui';
 import { GlobalProgressLine } from '@/components/global-progress-line';
 import { spacing, colors, type } from '@/theme/tokens';
+import { PushNotificationBridge } from '@/services/push-notifications';
 
 /**
  * Vanta root layout.
@@ -62,6 +63,7 @@ export default function RootLayout(): React.JSX.Element {
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <SessionProvider>
+        <PushNotificationBridge />
         <QuickAccountProvider>
           <View style={{ flex: 1, backgroundColor: '#FAFAF9' }}>
             <StatusBar style="dark" />

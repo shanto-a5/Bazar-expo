@@ -33,8 +33,8 @@ import {
   StyleSheet,
   Text,
   View,
-  type View as ViewType,
 } from 'react-native';
+import type { ComponentRef } from 'react';
 
 import { Button, Field, Logo } from '@/components/ui';
 import { useSession } from '@/modules/session/session-context';
@@ -97,11 +97,6 @@ async function captureAddress(): Promise<(CapturedAddress & { latitude?: number;
   };
 }
 
-/** The address is only worth saving once the fields the API requires are present. */
-function isComplete(address: CapturedAddress): boolean {
-  return Boolean(address.division && address.district && address.addressLine);
-}
-
 export interface QuickAccountRequest {
   /** Runs once the account exists (and any captured address was saved). */
   onAuthenticated?: () => void;
@@ -131,7 +126,7 @@ export function useQuickAccount(): QuickAccountContextValue {
  */
 export function QuickAccountProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [request, setRequest] = React.useState<QuickAccountRequest | null>(null);
-  const targetRef = React.useRef<ViewType | null>(null);
+  const targetRef = React.useRef<ComponentRef<typeof View> | null>(null);
   // A stable animation value. Held in state (not a ref) so it can be read during
   // render for the interpolations without tripping the refs-during-render rule.
   const [progress] = React.useState(() => new Animated.Value(0));
@@ -195,7 +190,7 @@ function QuickAccountOverlay({
   onClose,
   onSuccess,
 }: {
-  blurTarget: React.RefObject<ViewType | null>;
+  blurTarget: React.RefObject<ComponentRef<typeof View> | null>;
   progress: Animated.Value;
   onClose: () => void;
   onSuccess: () => void;

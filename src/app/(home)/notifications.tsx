@@ -10,6 +10,7 @@ import { useFocusRefresh } from '@/modules/orders/focus-refresh';
 import { withSession, type ProtectedRoute } from '@/modules/session/route-guard';
 import type { SessionContextValue } from '@/modules/session/session-context';
 import { notificationService } from '@/services/notification-service';
+import { enablePushNotifications } from '@/services/push-notifications';
 import type { AppNotification } from '@/domain/types';
 import { relativeTime } from '@/utils/time';
 import { colors, spacing, type } from '@/theme/tokens';
@@ -31,6 +32,7 @@ function groupLabel(notification: AppNotification): string {
 function NotificationsScreen({ session }: { session: SessionContextValue }): React.JSX.Element {
   const refresh = useFocusRefresh();
   const [scope, setScope] = React.useState<'all' | 'unread'>('all');
+  const [pushError, setPushError] = React.useState<string | null>(null);
   const userId = session.user?.id ?? '';
   const all = notificationService.list(userId);
   const notifications = scope === 'unread' ? all.filter((entry) => !entry.read) : all;
@@ -72,6 +74,10 @@ function NotificationsScreen({ session }: { session: SessionContextValue }): Rea
           />
         ) : null}
       </View>
+      <Pressable accessibilityRole="button" onPress={() => { void enablePushNotifications().then(() => setPushError(null)).catch((error: unknown) => setPushError(error instanceof Error ? error.message : 'Could not enable notifications.')); }}>
+        <Text style={[type.label, { color: colors.primary }]}>Enable push notifications</Text>
+      </Pressable>
+      {pushError ? <Text style={type.caption}>{pushError}</Text> : null}
 
       {all.length > 0 ? (
         <View style={styles.scopeRow}>

@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "467309943800",
+    "project_id": "bazar-dukan---backend",
+    "storage_bucket": "bazar-dukan---backend.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:467309943800:android:00dae3e887574ae886540d",
+        "android_client_info": {
+          "package_name": "com.kader95.vanta"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCgdf3_kiWYb53iFPFpYwQGm7JyNk9fd3o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:467309943800:android:011ede70b448958886540d",
+        "android_client_info": {
+          "package_name": "com.kader95.vantaseller"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCgdf3_kiWYb53iFPFpYwQGm7JyNk9fd3o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

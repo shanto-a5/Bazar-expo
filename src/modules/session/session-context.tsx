@@ -12,6 +12,7 @@ import { addressService } from '@/services/address-service';
 import { orderService } from '@/services/order-service';
 import { cartService, GUEST_CART_OWNER_ID } from '@/services/cart-service';
 import { notificationService } from '@/services/notification-service';
+import { unregisterAllPushDevices, unregisterPushDevice } from '@/services/push-notifications';
 import { listingCache } from '@/services/listing-cache';
 import { hydrateSellerWorkspace } from '@/api/remote-seller';
 import { hydrateFollows, hydrateRecentlyViewed, hydrateWishlist, subscribeSocial } from '@/api/remote-social';
@@ -192,6 +193,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   }, []);
 
   const signOut = React.useCallback(async (userId?: string): Promise<void> => {
+    await unregisterPushDevice();
     await authService.logout(userId);
     setUser(null);
     setStatus('signedOut');
@@ -200,6 +202,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   // Remote-only affordance: revoke every server session for the account, not just
   // this device. In local mode the gateway maps this to a plain sign-out.
   const signOutEverywhere = React.useCallback(async (userId?: string): Promise<void> => {
+    await unregisterAllPushDevices();
     await authService.logoutEverywhere(userId);
     setUser(null);
     setStatus('signedOut');

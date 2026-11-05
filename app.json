@@ -7,6 +7,9 @@
     "icon": "./assets/images/icon.png",
     "scheme": "vanta",
     "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "com.kader95.vanta"
+    },
     "android": {
       "icon": "./assets/images/bazar-android-icon.png",
       "adaptiveIcon": {
@@ -14,7 +17,8 @@
         "backgroundColor": "#FFFFFF"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.kader95.vanta"
+      "package": "com.kader95.vanta",
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "output": "static",
@@ -38,6 +42,9 @@
       ],
       "expo-font",
       "expo-image",
+      "expo-notifications",
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging",
       "expo-status-bar",
       "expo-web-browser"
     ],

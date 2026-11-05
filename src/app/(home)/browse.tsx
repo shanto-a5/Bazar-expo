@@ -198,7 +198,7 @@ export default function BrowseScreen(): React.JSX.Element {
                 fullWidth
               />
             </View>
-          ) : null
+          ) : undefined
         }
         onEndReachedThreshold={0.4}
         onEndReached={() => {

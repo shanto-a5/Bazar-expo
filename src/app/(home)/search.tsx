@@ -210,7 +210,7 @@ export default function SearchScreen(): React.JSX.Element {
             <Text style={{ ...type.h3, color: colors.textMuted, marginTop: spacing.md }}>
               Check the spelling, widen your filters, or pick a recent search above.
             </Text>
-          ) : null
+          ) : undefined
         }
         ListFooterComponent={
           hasMore ? (
@@ -222,7 +222,7 @@ export default function SearchScreen(): React.JSX.Element {
                 fullWidth
               />
             </View>
-          ) : null
+          ) : undefined
         }
         onEndReachedThreshold={0.4}
         onEndReached={() => {

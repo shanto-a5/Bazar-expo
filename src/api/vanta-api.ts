@@ -447,6 +447,14 @@ export class VantaApi {
   }
 
   // ----------------------------------------------------------- notifications
+  registerPushDevice(token: string, platform: 'android' | 'ios'): Promise<{ registered: boolean }> {
+    return this.client.post('/notifications/devices', { token, platform });
+  }
+
+  unregisterPushDevice(token?: string): Promise<{ removed: boolean }> {
+    return this.client.post('/notifications/devices/unregister', token ? { token } : {});
+  }
+
   /** Newest-first page of the caller's inbox plus that caller's total unread. */
   notifications(options: { limit?: number; unread?: boolean } = {}): Promise<{ notifications: NotificationDto[]; unreadCount: number }> {
     const { limit, unread } = options;

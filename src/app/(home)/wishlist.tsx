@@ -88,7 +88,7 @@ export default function WishlistScreen(): React.JSX.Element {
                 fullWidth
               />
             </View>
-          ) : null
+          ) : undefined
         }
       />
     </Screen>
