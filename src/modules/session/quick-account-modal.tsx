@@ -27,6 +27,7 @@ import {
   Animated,
   Easing,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -44,6 +45,38 @@ import { colors, makeShadow, radius, spacing, type } from '@/theme/tokens';
 /** The same shape the API accepts, so a number that passes here is accepted there. */
 const PHONE_RE = /^[0-9+\-\s]{6,20}$/;
 const POSTAL_RE = /^\d{4}$/;
+
+type Coordinates = { latitude: number; longitude: number };
+
+function validCoordinates(latitude: number, longitude: number): Coordinates | null {
+  return Number.isFinite(latitude) && Number.isFinite(longitude) &&
+    latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180
+    ? { latitude, longitude }
+    : null;
+}
+
+/** Reads a coordinate pair or coordinates embedded in a full Google Maps URL. */
+function parseCoordinates(value: string): Coordinates | null {
+  const pair = value.match(/(-?\d{1,2}(?:\.\d+)?)\s*[,，]\s*(-?\d{1,3}(?:\.\d+)?)/);
+  if (pair) return validCoordinates(Number(pair[1]), Number(pair[2]));
+  const path = value.match(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/i);
+  const at = value.match(/@(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/);
+  const match = path ?? at;
+  return match ? validCoordinates(Number(match[1]), Number(match[2])) : null;
+}
+
+/** Google Maps share links redirect to a full URL whose coordinates can be parsed. */
+async function resolveMapCoordinates(value: string): Promise<Coordinates | null> {
+  const direct = parseCoordinates(value);
+  if (direct) return direct;
+  let url: URL;
+  try { url = new URL(value.trim()); } catch { return null; }
+  if (url.protocol !== 'https:' || !/(^|\.)((maps\.app\.goo\.gl)|(goo\.gl)|(google\.[a-z.]+))$/i.test(url.hostname)) return null;
+  try {
+    const response = await fetch(url.toString(), { redirect: 'follow' });
+    return parseCoordinates(response.url) ?? parseCoordinates(await response.text());
+  } catch { return null; }
+}
 
 /** The address fields reverse geocoding can supply, any of which may be empty. */
 interface CapturedAddress {
@@ -200,8 +233,12 @@ function QuickAccountOverlay({
   const [fieldError, setFieldError] = React.useState<string | undefined>(undefined);
   const [formError, setFormError] = React.useState<string | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
+  const [manualLocation, setManualLocation] = React.useState('');
+  const [manualCoordinates, setManualCoordinates] = React.useState<Coordinates | null>(null);
+  const [locationError, setLocationError] = React.useState<string | null>(null);
+  const [resolvingLocation, setResolvingLocation] = React.useState(false);
 
-  const run = async (withLocation: boolean): Promise<void> => {
+  const run = async (locationMode: 'manual' | 'gps' | 'none'): Promise<void> => {
     setFormError(null);
     const trimmed = phone.trim();
     if (!trimmed) {
@@ -213,12 +250,25 @@ function QuickAccountOverlay({
       return;
     }
     setFieldError(undefined);
+    let manual = manualCoordinates;
+    if (locationMode === 'manual') {
+      setLocationError(null);
+      setResolvingLocation(true);
+      manual = await resolveMapCoordinates(manualLocation);
+      setResolvingLocation(false);
+      if (!manual) {
+        setLocationError('Enter valid latitude, longitude coordinates or a Google Maps link that includes them.');
+        return;
+      }
+    }
     setSubmitting(true);
     try {
       // Location is captured before the account exists: the permission prompt and
       // a fix are slow, and there is no reason to mint an account only to find the
       // customer refused.
-      const captured = withLocation ? await captureAddress().catch(() => null) : null;
+      const captured = locationMode === 'manual'
+        ? { division: '', district: '', area: '', addressLine: '', postalCode: '', ...manual! }
+        : locationMode === 'gps' ? await captureAddress().catch(() => null) : null;
 
       const user = await quickAccount(trimmed);
 
@@ -245,7 +295,7 @@ function QuickAccountOverlay({
               postalCode: POSTAL_RE.test(captured.postalCode) ? captured.postalCode : '',
               isDefault: true,
               ...(hasCoords ? { latitude: captured.latitude, longitude: captured.longitude } : {}),
-            } as any)
+            })
             .catch(() => undefined);
         }
       }
@@ -314,27 +364,76 @@ function QuickAccountOverlay({
               error={fieldError}
               hint="We only use this to reach you about your orders."
               returnKeyType="done"
-              onSubmitEditing={() => void run(false)}
+              onSubmitEditing={() => void run('none')}
             />
+
+            <View style={styles.locationBox}>
+              <Text style={{ ...type.h3, color: colors.text, marginBottom: spacing.xs }}>Use coordinates from Google Maps</Text>
+              <Text style={{ ...type.caption, marginBottom: spacing.sm }}>
+                If your device can&apos;t share its location, open Google Maps and paste a coordinate pair or Maps link here. Location is optional.
+              </Text>
+              <Pressable
+                onPress={() => void Linking.openURL('https://maps.google.com/?q=My%20Location').catch(() => undefined)}
+                style={{ paddingVertical: spacing.xs, alignSelf: 'flex-start' }}
+                accessibilityRole="link"
+              >
+                <Text style={{ ...type.caption, color: colors.accent, textDecorationLine: 'underline' }}>Open Google Maps</Text>
+              </Pressable>
+              <Field
+                label="Coordinates or Google Maps link"
+                value={manualLocation}
+                onChangeText={(value) => {
+                  setManualLocation(value);
+                  setManualCoordinates(parseCoordinates(value));
+                  setLocationError(null);
+                }}
+                placeholder="23.8103, 90.4125 or paste a Maps link"
+                error={locationError}
+                hint="Example: 23.8103, 90.4125"
+                returnKeyType="done"
+                onSubmitEditing={() => { if (manualLocation.trim()) void run('manual'); }}
+              />
+              {manualLocation.trim() ? (
+                <Button
+                  title="Continue with these coordinates"
+                  onPress={() => void run('manual')}
+                  loading={submitting || resolvingLocation}
+                  disabled={submitting || resolvingLocation}
+                  fullWidth
+                />
+              ) : (
+                <>
+                  <Button
+                    title="Use my current location & continue"
+                    onPress={() => void run('gps')}
+                    loading={submitting}
+                    disabled={submitting}
+                    fullWidth
+                  />
+                  <View style={{ height: spacing.sm }} />
+                  <Button
+                    title="Continue without location"
+                    variant="secondary"
+                    onPress={() => void run('none')}
+                    disabled={submitting}
+                    fullWidth
+                  />
+                </>
+              )}
+              {manualLocation.trim() ? (
+                <Pressable onPress={() => void run('none')} disabled={submitting} style={styles.optionalAction}>
+                  <Text style={{ ...type.caption, color: colors.textMuted }}>Continue without location</Text>
+                </Pressable>
+              ) : null}
+              <Pressable onPress={() => void run('gps')} disabled={submitting} style={styles.optionalAction}>
+                <Text style={{ ...type.caption, color: colors.accent }}>Try my current location (optional)</Text>
+              </Pressable>
+            </View>
 
             {formError ? (
               <Text style={{ ...type.caption, color: colors.danger, marginBottom: spacing.sm }}>{formError}</Text>
             ) : null}
 
-            <Button
-              title="Use my current location & continue"
-              onPress={() => void run(true)}
-              loading={submitting}
-              fullWidth
-            />
-            <View style={{ height: spacing.sm }} />
-            <Button
-              title="Continue without location"
-              variant="secondary"
-              onPress={() => void run(false)}
-              disabled={submitting}
-              fullWidth
-            />
           </ScrollView>
         </Animated.View>
       </KeyboardAvoidingView>
@@ -371,4 +470,6 @@ const styles = StyleSheet.create({
   },
   closeGlyph: { color: colors.textMuted, fontSize: 14, fontWeight: '700' },
   scroll: { flexGrow: 0, flexShrink: 1 },
+  locationBox: { marginTop: spacing.md, padding: spacing.md, backgroundColor: colors.surfaceMuted, borderRadius: radius.lg },
+  optionalAction: { alignItems: 'center', paddingVertical: spacing.sm },
 });

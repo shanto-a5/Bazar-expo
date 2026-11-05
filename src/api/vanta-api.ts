@@ -234,6 +234,8 @@ export interface CheckoutInput {
     postalCode?: string;
     instructions?: string;
     isDefault?: boolean;
+    latitude?: number;
+    longitude?: number;
   };
   paymentMethod: 'cod' | 'bkash' | 'nagad' | 'card';
   deliveryMethod?: 'standard' | 'express';
@@ -252,6 +254,8 @@ export interface AddressPayload {
   postalCode?: string;
   instructions?: string;
   isDefault?: boolean;
+  latitude?: number;
+  longitude?: number;
 }
 
 /**

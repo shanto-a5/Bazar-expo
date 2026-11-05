@@ -35,4 +35,6 @@ export interface Address extends BaseEntity {
   postalCode: string;
   instructions?: string;
   isDefault: boolean;
+  latitude?: number;
+  longitude?: number;
 }

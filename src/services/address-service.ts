@@ -11,6 +11,8 @@ export interface AddressInput {
   area: string;
   addressLine: string;
   postalCode: string;
+  latitude?: number;
+  longitude?: number;
   instructions?: string;
   isDefault?: boolean;
 }
@@ -21,8 +23,8 @@ function validate(input: AddressInput): Partial<Record<AddressField, string>> {
   const errors: Partial<Record<AddressField, string>> = {};
   if (!input.recipientName?.trim()) errors.recipientName = 'Who should receive the order?';
   if ((input.phone || '').replace(/\D/g, '').length < 6) errors.phone = 'Enter a valid phone number';
-  const lat = (input as any).latitude;
-  const lng = (input as any).longitude;
+  const lat = input.latitude;
+  const lng = input.longitude;
   const hasValidGps =
     lat !== undefined &&
     lat !== null &&
@@ -46,10 +48,10 @@ function validate(input: AddressInput): Partial<Record<AddressField, string>> {
 }
 
 function toPayload(input: AddressInput): AddressPayload {
-  const lat = (input as any).latitude;
-  const lng = (input as any).longitude;
-  const hasLat = lat !== undefined && lat !== null && lat !== '' && Number.isFinite(Number(lat));
-  const hasLng = lng !== undefined && lng !== null && lng !== '' && Number.isFinite(Number(lng));
+  const lat = input.latitude;
+  const lng = input.longitude;
+  const hasLat = lat !== undefined && lat !== null && Number.isFinite(Number(lat));
+  const hasLng = lng !== undefined && lng !== null && Number.isFinite(Number(lng));
   return {
     label: (input.label || '').trim() || 'Address',
     recipientName: (input.recipientName || '').trim(),
@@ -241,6 +243,8 @@ export class AddressService {
       area: patch.area ?? address.area,
       addressLine: patch.addressLine ?? address.addressLine,
       postalCode: patch.postalCode ?? address.postalCode,
+      latitude: patch.latitude ?? address.latitude,
+      longitude: patch.longitude ?? address.longitude,
       instructions: patch.instructions ?? address.instructions,
     };
     const errors = validate(merged);

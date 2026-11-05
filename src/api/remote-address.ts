@@ -25,6 +25,8 @@ export interface AddressDto {
   postalCode: string;
   instructions: string | null;
   isDefault: boolean;
+  latitude?: number | null;
+  longitude?: number | null;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -44,6 +46,9 @@ export function mapAddress(dto: AddressDto): Address {
     postalCode: dto.postalCode,
     instructions: dto.instructions ?? undefined,
     isDefault: dto.isDefault,
+    ...(typeof dto.latitude === 'number' && typeof dto.longitude === 'number'
+      ? { latitude: dto.latitude, longitude: dto.longitude }
+      : {}),
     createdAt: stamp,
     updatedAt: dto.updatedAt ?? stamp,
   };

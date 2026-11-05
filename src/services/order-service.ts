@@ -314,6 +314,8 @@ export class OrderService {
           postalCode: input.address.postalCode,
           instructions: input.address.instructions,
           isDefault: input.address.isDefault,
+          latitude: input.address.latitude,
+          longitude: input.address.longitude,
         },
         paymentMethod: input.paymentMethod,
         deliveryMethod: input.deliveryMethod,
