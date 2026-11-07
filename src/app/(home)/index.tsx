@@ -349,7 +349,7 @@ export default function HomeScreen(): React.JSX.Element {
     }, [cartOwnerId, user, syncFollowed]),
   );
 
-  const { refreshing, refresh, retry: retryHome, error: homeError, version } = useListingCache(cartOwnerId, 'home');
+  const { loaded: catalogLoaded, refreshing, refresh, retry: retryHome, error: homeError, version } = useListingCache(cartOwnerId, 'home');
 
   // Every read below pulls from the device mirror synchronously. `version` ticks
   // whenever a background or pull-to-refresh read settles, so each memo lists it
@@ -383,6 +383,7 @@ export default function HomeScreen(): React.JSX.Element {
     void version;
     return catalogService.recommendations(user?.id, 10);
   }, [user?.id, version]);
+  const waitingForCatalog = !catalogLoaded && categories.length === 0 && products.length === 0;
   const recent = React.useMemo(() => {
     void version;
     return user ? catalogService.recentlyViewed(user.id, 10) : [];
@@ -575,6 +576,12 @@ export default function HomeScreen(): React.JSX.Element {
             ))}
           </ScrollView>
         </View>
+      ) : waitingForCatalog ? (
+        <View style={{ flexDirection: 'row', gap: spacing.sm, marginVertical: spacing.md }} accessibilityLabel="Loading categories">
+          {[0, 1, 2, 3].map((key) => (
+            <View key={key} style={{ width: 76, height: 76, borderRadius: radius.lg, backgroundColor: colors.surfaceMuted }} />
+          ))}
+        </View>
       ) : null}
 
       {dealRail ? (
@@ -680,9 +687,17 @@ export default function HomeScreen(): React.JSX.Element {
           />
         )}
         ListEmptyComponent={
-          <Text style={{ ...type.h3, color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }}>
-            No products yet — check back soon.
-          </Text>
+          waitingForCatalog ? (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }} accessibilityLabel="Loading products">
+              {[0, 1, 2, 3].map((key) => (
+                <View key={key} style={{ flex: 1, minWidth: '44%', height: 210, borderRadius: radius.lg, backgroundColor: colors.surfaceMuted }} />
+              ))}
+            </View>
+          ) : (
+            <Text style={{ ...type.h3, color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }}>
+              No products yet — check back soon.
+            </Text>
+          )
         }
       />
     </View>

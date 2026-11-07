@@ -4,7 +4,7 @@
  * The app's read paths are synchronous repository calls (`products.list()`,
  * `stores.getById()`, …) spread across many screens. Rather than re-plumb every
  * call site to async in M7, remote mode uses a read-through mirror: the API is the
- * datastore, and its catalogue snapshot is written into the local database at boot
+ * datastore, and its catalogue snapshot is written into the local database on refresh
  * so the existing read paths keep working unchanged.
  *
  * What the mirror is, and is not:
@@ -12,11 +12,12 @@
  *   - It holds *catalogue* data only — categories, products, stores, and the
  *     public identity of the sellers behind those stores. Those are shared,
  *     read-mostly and safe to cache on device.
- *   - It is a cache, not a source of truth. Each boot replaces the collections
- *     wholesale, so a delisted product disappears instead of lingering.
- *   - It NEVER holds per-user authoritative state: no sessions, no cart, no
- *     orders, no payments, no wishlist. Those are read from the API on demand, so
- *     a shared or stale device cannot show another account's data.
+ *   - It is a cache, not a source of truth. Each successful refresh reconciles
+ *     rows by id, so unchanged objects stay stable and delisted products disappear.
+ *   - Commerce state remains server-authoritative: carts, orders, payments and
+ *     social lists are scoped to the authenticated account. The existing session
+ *     collection stores only a token-bound user snapshot for offline identity
+ *     restoration; it is cleared on logout and never authorizes API operations.
  *   - Seller records ARE mirrored, but only the public projection the catalogue
  *     already exposes on each store (`id`, `fullName`, `status`, `sellerType`).
  *     That is what the shared `customerVisibility` rule needs: a product is only
@@ -153,11 +154,11 @@ function describeHydrationFailure(error: unknown): Error {
 }
 
 /**
- * Replaces the local catalogue snapshot with the server's.
+ * Reconciles only changed rows with the server snapshot. The local database
+ * preserves unchanged references and removes rows the server no longer returns.
  *
- * Rejects on any API failure: a remote-mode app that boots with an empty
- * catalogue looks like a legitimately empty marketplace, which is worse than a
- * visible error. Nothing here falls back to a cached or seeded copy.
+ * Rejects on API failure so its caller can keep the saved catalogue and report
+ * a refresh issue. No saved rows are replaced on a failed request.
  */
 export async function hydrateRemoteCatalog(): Promise<HydrationReport> {
   const { db } = getContainer();
@@ -178,16 +179,14 @@ export async function hydrateRemoteCatalog(): Promise<HydrationReport> {
     throw describeHydrationFailure(error);
   }
 
-  // Wholesale replacement, not a merge: a product withdrawn on the server must
-  // disappear from the mirror rather than remain visible on the device. The
-  // seller stubs are replaced with the same rule, then the signed-in seller's own
+  // A product withdrawn on the server disappears from the mirror rather than
+  // remaining visible on the device. Seller stubs follow the same rule, then the seller's own
   // full profile (if any) is upserted over its stub by `hydrateSellerWorkspace`
   // once the session restores.
-  db.replaceCollection('categories', categories);
-  db.replaceCollection('products', products);
-  db.replaceCollection('stores', stores);
-  db.replaceCollection('sellers', sellers);
-  await db.persistAll();
+  db.reconcileCollection('categories', categories);
+  db.reconcileCollection('products', products);
+  db.reconcileCollection('stores', stores);
+  db.reconcileCollection('sellers', sellers);
 
   return {
     categories: categories.length,

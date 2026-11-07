@@ -77,7 +77,11 @@ class ListingCache {
   // ---------------------------------------------------------------- keying
 
   private key(accountId: string, resource: ListingResource): string {
-    return `${accountId}${KEY_SEPARATOR}${resource}`;
+    // The catalogue is public and identical for every customer. A shared
+    // freshness key avoids a second full sync when startup resolves from the
+    // guest owner to the restored account owner.
+    const owner = resource === 'home' ? 'public' : accountId;
+    return `${owner}${KEY_SEPARATOR}${resource}`;
   }
 
   private readRecord(accountId: string, resource: ListingResource): ListCacheRecord | undefined {
@@ -202,6 +206,7 @@ class ListingCache {
     }
 
     for (const resource of LISTING_RESOURCES) {
+      if (resource === 'home') continue;
       this.states.delete(this.key(accountId, resource));
       if (db) {
         try {

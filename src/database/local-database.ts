@@ -94,7 +94,9 @@ export class LocalDatabase {
     const collection = this.getCollection<any>(key);
     const index = collection.findIndex((item) => item.id === entity.id);
     if (index >= 0) {
-      collection[index] = { ...collection[index], ...entity };
+      const next = { ...collection[index], ...entity };
+      if (JSON.stringify(collection[index]) === JSON.stringify(next)) return;
+      collection[index] = next;
     } else {
       collection.push(entity);
     }
@@ -118,6 +120,43 @@ export class LocalDatabase {
   replaceCollection(key: CollectionKey, items: unknown[]): void {
     this.data.set(key, items);
     this.markDirty(key);
+  }
+
+  /**
+   * Reconcile a server snapshot by id while preserving references for unchanged
+   * rows. Only changed collections are persisted, and absent server rows are
+   * removed so stale catalogue entries cannot linger.
+   */
+  reconcileCollection<T extends { id: string }>(key: CollectionKey, items: T[]): void {
+    const current = this.getCollection<T>(key);
+    const incoming = new Map(items.map((item) => [item.id, item]));
+    const next: T[] = [];
+    let changed = false;
+
+    for (const previous of current) {
+      const fresh = incoming.get(previous.id);
+      if (!fresh) {
+        changed = true;
+        continue;
+      }
+      incoming.delete(previous.id);
+      if (JSON.stringify(previous) === JSON.stringify(fresh)) {
+        next.push(previous);
+      } else {
+        next.push(fresh);
+        changed = true;
+      }
+    }
+
+    if (incoming.size > 0) {
+      next.push(...incoming.values());
+      changed = true;
+    }
+
+    if (changed) {
+      this.data.set(key, next);
+      this.markDirty(key);
+    }
   }
 
   subscribe(listener: () => void): () => void {

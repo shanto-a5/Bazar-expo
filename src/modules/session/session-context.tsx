@@ -16,7 +16,8 @@ import { unregisterAllPushDevices, unregisterPushDevice } from '@/services/push-
 import { listingCache } from '@/services/listing-cache';
 import { hydrateSellerWorkspace } from '@/api/remote-seller';
 import { hydrateFollows, hydrateRecentlyViewed, hydrateWishlist, subscribeSocial } from '@/api/remote-social';
-import { hydrateMyReviews, subscribeReviews } from '@/api/remote-reviews';
+import { ensureMyReviews, hydrateMyReviews, subscribeReviews } from '@/api/remote-reviews';
+import { getContainer } from '@/infrastructure/container';
 
 export type SessionStatus = 'checking' | 'signedIn' | 'signedOut';
 
@@ -42,6 +43,59 @@ export interface SessionContextValue {
 
 const SessionContext = React.createContext<SessionContextValue | null>(null);
 
+const SESSION_CACHE_ID = 'active-authenticated-user';
+
+interface SessionCacheRecord {
+  id: string;
+  tokenFingerprint: string;
+  user: User;
+}
+
+// This fingerprint only binds the cached identity to the token stored on this
+// device; it is not used as an authentication credential.
+function tokenFingerprint(token: string): string {
+  let first = 2166136261;
+  let second = 2246822519;
+  for (let index = 0; index < token.length; index += 1) {
+    const code = token.charCodeAt(index);
+    first = Math.imul(first ^ code, 16777619);
+    second = Math.imul(second ^ (code + index), 3266489917);
+  }
+  return `${(first >>> 0).toString(36)}:${(second >>> 0).toString(36)}:${token.length}`;
+}
+
+async function persistSessionCache(user: User, expectedToken?: string | null): Promise<void> {
+  const container = getContainer();
+  const token = await container.sessionStorage.getToken();
+  if (token && (expectedToken === undefined || token === expectedToken)) {
+    container.db.upsert('sessions', { id: SESSION_CACHE_ID, tokenFingerprint: tokenFingerprint(token), user });
+  }
+}
+
+function readSessionCache(token: string | null): User | null {
+  if (!token) return null;
+  const cached = getContainer().db.getById<SessionCacheRecord>('sessions', SESSION_CACHE_ID);
+  return cached?.tokenFingerprint === tokenFingerprint(token) ? cached.user : null;
+}
+
+function clearSessionCache(): void {
+  getContainer().db.remove('sessions', SESSION_CACHE_ID);
+}
+
+function refreshAccountData(user: User): void {
+  const { id: userId } = user;
+  // These existing read paths own their TTL and in-flight deduplication.
+  orderService.customerOrders(userId);
+  notificationService.unreadCount(userId);
+  ensureMyReviews(userId);
+  void Promise.allSettled([
+    hydrateSellerWorkspace(),
+    hydrateWishlist(userId),
+    hydrateFollows(userId),
+    hydrateRecentlyViewed(userId),
+  ]);
+}
+
 export function SessionProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [status, setStatus] = React.useState<SessionStatus>('checking');
   const [user, setUser] = React.useState<User | null>(null);
@@ -52,32 +106,40 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
 
   React.useEffect(() => {
     let mounted = true;
-    ensureBooted()
-      .then(() => authService.getCurrentUser())
-      .then(async (current) => {
-        // Pull the seller workspace into the device mirror before the UI unlocks,
-        // so the synchronous seller reads see real data instead of an empty store.
-        if (current) await hydrateSellerWorkspace().catch(() => undefined);
-        // The address book is server-owned in remote mode; prime the mirror now so
-        // the account count and the checkout address picker are not empty on open.
-        if (current) await addressService.hydrate(current.id).catch(() => undefined);
-        if (current) await orderService.hydrateCustomerOrders(current.id).catch(() => undefined);
-        if (current) await notificationService.hydrate(current.id).catch(() => undefined);
-        if (current) await hydrateWishlist(current.id).catch(() => undefined);
-        if (current) await hydrateFollows(current.id).catch(() => undefined);
-        if (current) await hydrateMyReviews(current.id).catch(() => undefined);
-        if (current) await hydrateRecentlyViewed(current.id).catch(() => undefined);
+    void (async () => {
+      try {
+        await ensureBooted();
+        const restoreToken = await getContainer().sessionStorage.getToken();
+        const cached = readSessionCache(restoreToken);
+        if (cached && mounted) {
+          setUser(cached);
+          setStatus('signedIn');
+        }
+
+        const current = await authService.getCurrentUser();
+        if ((await getContainer().sessionStorage.getToken()) !== restoreToken) return;
         if (!mounted) return;
-        if (current) listingCache.markHydrated(current.id);
-        setUser(current);
-        setStatus(current ? 'signedIn' : 'signedOut');
-      })
-      .catch(() => {
-        if (mounted) {
+        if (current) {
+          setUser(current);
+          setStatus('signedIn');
+          void persistSessionCache(current, restoreToken);
+          listingCache.ensure(current.id, 'home');
+          refreshAccountData(current);
+        } else {
+          clearSessionCache();
           setUser(null);
           setStatus('signedOut');
+          listingCache.ensure(GUEST_OWNER_ID, 'home');
         }
-      });
+      } catch (error) {
+        // A network failure cannot establish that a stored session is invalid.
+        // Keep a token-matched cached identity signed in; otherwise remain in the
+        // checking state instead of briefly presenting a guest account.
+        if (mounted) {
+          console.warn('[vanta] session restore is waiting for the API', error);
+        }
+      }
+    })();
     return () => {
       mounted = false;
     };
@@ -140,7 +202,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     await hydrateFollows(loggedIn.id).catch(() => undefined);
     await hydrateMyReviews(loggedIn.id).catch(() => undefined);
     await hydrateRecentlyViewed(loggedIn.id).catch(() => undefined);
-    listingCache.markHydrated(loggedIn.id);
+    await persistSessionCache(current ?? loggedIn);
+    listingCache.markHydrated(loggedIn.id, ['cart', 'orders', 'account']);
     setUser(current ?? loggedIn);
     setStatus(current ? 'signedIn' : 'signedOut');
     return loggedIn;
@@ -160,7 +223,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       await hydrateFollows(registered.id).catch(() => undefined);
       await hydrateMyReviews(registered.id).catch(() => undefined);
       await hydrateRecentlyViewed(registered.id).catch(() => undefined);
-      listingCache.markHydrated(registered.id);
+      await persistSessionCache(registered);
+      listingCache.markHydrated(registered.id, ['cart', 'orders', 'account']);
       setUser(registered);
       setStatus('signedIn');
       return registered;
@@ -186,7 +250,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     await hydrateFollows(created.id).catch(() => undefined);
     await hydrateMyReviews(created.id).catch(() => undefined);
     await hydrateRecentlyViewed(created.id).catch(() => undefined);
-    listingCache.markHydrated(created.id);
+    await persistSessionCache(created);
+    listingCache.markHydrated(created.id, ['cart', 'orders', 'account']);
     setUser(created);
     setStatus('signedIn');
     return created;
@@ -195,6 +260,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   const signOut = React.useCallback(async (userId?: string): Promise<void> => {
     await unregisterPushDevice();
     await authService.logout(userId);
+    clearSessionCache();
     setUser(null);
     setStatus('signedOut');
   }, []);
@@ -204,6 +270,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   const signOutEverywhere = React.useCallback(async (userId?: string): Promise<void> => {
     await unregisterAllPushDevices();
     await authService.logoutEverywhere(userId);
+    clearSessionCache();
     setUser(null);
     setStatus('signedOut');
   }, []);
@@ -218,7 +285,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     if (current) await hydrateFollows(current.id).catch(() => undefined);
     if (current) await hydrateMyReviews(current.id).catch(() => undefined);
     if (current) await hydrateRecentlyViewed(current.id).catch(() => undefined);
-    if (current) listingCache.markHydrated(current.id);
+    if (current) await persistSessionCache(current);
+    else clearSessionCache();
+    if (current) listingCache.markHydrated(current.id, ['cart', 'orders', 'account']);
     setUser(current);
     setStatus(current ? 'signedIn' : 'signedOut');
   }, []);

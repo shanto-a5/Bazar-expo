@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Bazar",
-    "slug": "vanta",
+    "slug": "samrat-bazar",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -18,7 +18,11 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.kader95.vanta",
-      "googleServicesFile": "./google-services.json"
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "output": "static",
@@ -53,9 +57,13 @@
       "reactCompiler": false
     },
     "extra": {
-      "router": {},
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
       "eas": {
-        "projectId": "c8fa6ce0-1988-4786-b1c7-1b3409e8e96b"
+        "projectId": "c1e14728-434b-45f1-8fc2-83e408123259"
       }
     }
   }

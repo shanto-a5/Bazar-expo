@@ -5,7 +5,7 @@ import { ActivityIndicator, Text, View } from 'react-native';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 
 import { QuickAccountProvider } from '@/modules/session/quick-account-modal';
-import { SessionProvider } from '@/modules/session/session-context';
+import { SessionProvider, useSession } from '@/modules/session/session-context';
 import { useBootGate } from '@/infrastructure/bootstrap';
 import { Button, Card } from '@/components/ui';
 import { GlobalProgressLine } from '@/components/global-progress-line';
@@ -21,12 +21,10 @@ import { PushNotificationBridge } from '@/services/push-notifications';
  *    provider tree, never as a bare-Slot prelude. This is the single identity
  *    authority; session restore and the initial `checking` state live inside it
  *    (M2-B).
- *  - The boot gate holds routes back until the persistence layer is loaded and
- *    the category taxonomy is installed (M2-A). No route — protected or not —
- *    mounts before that, and no screen ever sees a missing provider. While the
- *    gate is closed the tree shows a labelled spinner rather than a blank frame,
- *    and a rejected boot renders a retryable failure card instead of an empty
- *    screen (M9-B).
+ *  - The boot gate waits only for the local database. The session gate then
+ *    restores the token-matched identity before routes mount; remote catalogue
+ *    refreshes continue through the existing cache hooks in the background.
+ *    Failed local storage loads still show a retryable error card.
  *  - Route groups decide navigation: (home), (auth) (M2-C).
  *  - The groups are hosted by a native `Stack`, NOT a `Slot` (M10-N1). A `Slot`
  *    renders only the matched child, so crossing into (auth) unmounted (home)
@@ -57,6 +55,16 @@ export const unstable_settings = {
   initialRouteName: '(home)',
 };
 
+function SessionStartupGate({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const { status } = useSession();
+  if (status !== 'checking') return <>{children}</>;
+  return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.lg }}>
+      <ActivityIndicator size="large" color={colors.primary} accessibilityLabel="Restoring your session" />
+    </View>
+  );
+}
+
 export default function RootLayout(): React.JSX.Element {
   const boot = useBootGate();
 
@@ -85,7 +93,9 @@ export default function RootLayout(): React.JSX.Element {
               </View>
             ) : null}
             {boot.status === 'ready' ? (
-              <Stack screenOptions={{ headerShown: false }} />
+              <SessionStartupGate>
+                <Stack screenOptions={{ headerShown: false }} />
+              </SessionStartupGate>
             ) : null}
             {boot.status === 'failed' ? (
               <View
