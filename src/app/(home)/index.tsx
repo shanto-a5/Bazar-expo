@@ -9,7 +9,9 @@
  * is hardcoded and no marketplace feature is simulated.
  */
 import * as React from 'react';
-import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 
 import { Image as ExpoImage } from 'expo-image';
 import { router, useFocusEffect } from 'expo-router';
@@ -27,6 +29,7 @@ import { WishlistButton } from '@/modules/wishlist/wishlist-button';
 import type { Category, Product, Store } from '@/domain/types';
 import { cartService } from '@/services/cart-service';
 import { catalogService, effectivePrice } from '@/services/catalog-service';
+import { vantaApi } from '@/api/vanta-api';
 import { notificationService } from '@/services/notification-service';
 import { storeService } from '@/services/store-service';
 import { voucherService } from '@/services/voucher-service';
@@ -37,6 +40,12 @@ const ICON_WEIGHT = { ios: 'medium' as const, android: mediumWeight };
 
 const CATEGORY_TILE_WIDTH = 66;
 const CATEGORY_ICON_BOX = 52;
+const AREA_PREF = 'bazar.area-shopping.v1';
+
+export function matchAreaTokens(tokens: string[], areas: { name: string; slug: string }[]): { name: string; slug: string } | null {
+  const normalized = tokens.join(' ').toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, ' ');
+  return areas.find((area) => normalized.includes(area.name.toLowerCase()) || normalized.includes(area.slug.replace(/-/g, ' '))) ?? null;
+}
 
 /** Short display labels for the reference categories; everything else keeps its own name. */
 const CATEGORY_LABELS: Record<string, string> = {
@@ -338,6 +347,44 @@ export default function HomeScreen(): React.JSX.Element {
   const [cartCount, setCartCount] = React.useState(0);
   const [notifCount, setNotifCount] = React.useState(0);
   const [followed, setFollowed] = React.useState<Set<string>>(() => new Set());
+  const [selectedArea, setSelectedArea] = React.useState('');
+  const [areaInput, setAreaInput] = React.useState('');
+  const [viewAll, setViewAll] = React.useState(false);
+  const [knownAreas, setKnownAreas] = React.useState<{ name: string; slug: string }[]>([]);
+  React.useEffect(() => {
+    let live = true;
+    void AsyncStorage.getItem(AREA_PREF).then((raw) => {
+      if (!live || !raw) return;
+      const saved = JSON.parse(raw) as { area?: string; all?: boolean };
+      setSelectedArea(saved.area ?? ''); setAreaInput(saved.area ?? ''); setViewAll(Boolean(saved.all));
+    }).catch(() => undefined);
+    void vantaApi.areas().then(({ areas }) => { if (live) setKnownAreas(areas); }).catch(() => undefined);
+    return () => { live = false; };
+  }, []);
+  useFocusEffect(React.useCallback(() => {
+    let live = true;
+    void AsyncStorage.getItem(AREA_PREF).then((raw) => {
+      if (!live || !raw) return;
+      const saved = JSON.parse(raw) as { area?: string; all?: boolean };
+      setSelectedArea(saved.area ?? ''); setAreaInput(saved.area ?? ''); setViewAll(Boolean(saved.all));
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, []));
+  const saveAreaPrefs = React.useCallback((area: string, all = viewAll) => {
+    setSelectedArea(area); setAreaInput(area);
+    void AsyncStorage.setItem(AREA_PREF, JSON.stringify({ area, all })).catch(() => undefined);
+  }, [viewAll]);
+  const runGpsArea = React.useCallback(async () => {
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (!permission.granted) return;
+      const position = await Location.getCurrentPositionAsync({});
+      const places = await Location.reverseGeocodeAsync(position.coords);
+      const place = places[0];
+      const match = matchAreaTokens([place?.district ?? '', place?.subregion ?? '', place?.city ?? '', place?.region ?? ''], knownAreas);
+      if (match) saveAreaPrefs(match.slug);
+    } catch { /* Area selection remains available manually. */ }
+  }, [knownAreas, saveAreaPrefs]);
   const syncFollowed = React.useCallback(() => {
     setFollowed(user ? new Set(storeService.followedStores(user.id).map((s) => s.id)) : new Set<string>());
   }, [user]);
@@ -360,15 +407,22 @@ export default function HomeScreen(): React.JSX.Element {
   }, [version]);
   const products = React.useMemo(() => {
     void version;
-    return catalogService.query({
+    const allProducts = catalogService.query({
       statuses: ['active'],
       inStockOnly: true,
       sort: 'popularity',
       customerVisibleOnly: true,
-      limit: 24,
+      limit: 1000,
       offset: 0,
     });
-  }, [version]);
+    const stores = catalogService.visibleStores();
+    const areas = knownAreas.length ? knownAreas : stores.flatMap((store) => store.serviceAreas ?? []);
+    const area = selectedArea || (viewAll ? '' : areaInput.trim());
+    if (!area) return allProducts.slice(0, 24);
+    const slug = areas.find((item) => item.slug === area || item.name.toLowerCase() === area.toLowerCase())?.slug ?? area.toLowerCase().replace(/\s+/g, '-');
+    const servedStores = new Set(stores.filter((store) => store.status === 'active' && (store.serviceAreas ?? []).some((entry) => entry.slug === slug || entry.name.toLowerCase() === area.toLowerCase())).map((store) => store.id));
+    return allProducts.filter((product) => servedStores.has(product.storeId));
+  }, [version, knownAreas, selectedArea, viewAll, areaInput]);
   const deals = React.useMemo(() => {
     void version;
     return catalogService.query({
@@ -538,6 +592,15 @@ export default function HomeScreen(): React.JSX.Element {
 
   const content = (
     <View>
+      <View style={{ marginBottom: spacing.md, gap: spacing.sm }}>
+        <Text style={type.label}>Shop your area</Text>
+        <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+          <TextInput value={areaInput} onChangeText={setAreaInput} placeholder="Enter village or area" style={{ flex: 1, minHeight: 44, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: spacing.md, color: colors.text }} onSubmitEditing={() => saveAreaPrefs(areaInput.trim())} />
+          <Pressable onPress={() => saveAreaPrefs(areaInput.trim())} style={{ justifyContent: 'center', paddingHorizontal: spacing.md, backgroundColor: colors.primary, borderRadius: radius.md }}><Text style={{ color: colors.textInverse }}>Apply</Text></Pressable>
+          <Pressable onPress={() => void runGpsArea()} style={{ justifyContent: 'center', paddingHorizontal: spacing.sm }}><Text style={{ color: colors.primary }}>GPS</Text></Pressable>
+        </View>
+        {(viewAll ? [{ name: 'All Areas', slug: '' }, ...knownAreas] : knownAreas.slice(0, 8)).length > 0 ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>{(viewAll ? [{ name: 'All Areas', slug: '' }, ...knownAreas] : knownAreas.slice(0, 8)).map((area) => <Pressable key={area.slug || 'all'} onPress={() => saveAreaPrefs(area.slug)} style={{ paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: 99, backgroundColor: (selectedArea || '') === area.slug ? colors.primary : colors.surfaceMuted }}><Text style={{ color: (selectedArea || '') === area.slug ? colors.textInverse : colors.text }}>{area.name}</Text></Pressable>)}</ScrollView> : null}
+      </View>
       {homeError ? (
         <NoticeCard
           tone="warning"
@@ -693,6 +756,8 @@ export default function HomeScreen(): React.JSX.Element {
                 <View key={key} style={{ flex: 1, minWidth: '44%', height: 210, borderRadius: radius.lg, backgroundColor: colors.surfaceMuted }} />
               ))}
             </View>
+          ) : selectedArea && !viewAll ? (
+            <View style={{ alignItems: 'center', gap: spacing.md, padding: spacing.lg }}><Text style={{ ...type.h3, color: colors.textMuted, textAlign: 'center' }}>No products are listed for this area yet.</Text><Pressable onPress={() => router.push('/settings')}><Text style={{ color: colors.primary, fontWeight: '700' }}>Open Settings to view all products</Text></Pressable></View>
           ) : (
             <Text style={{ ...type.h3, color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl }}>
               No products yet — check back soon.

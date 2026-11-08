@@ -89,6 +89,8 @@ export interface StoreDto {
   deliveryEstimateDays: { min: number; max: number };
   location: string;
   verified: boolean;
+  primaryArea?: { name: string; slug: string } | null;
+  serviceAreas?: { name: string; slug: string }[];
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -340,6 +342,8 @@ export function mapStore(dto: StoreDto): Store {
     },
     location: dto.location,
     verified: dto.verified,
+    primaryArea: dto.primaryArea ?? null,
+    serviceAreas: dto.serviceAreas ?? [],
     createdAt: stamp,
     updatedAt: dto.updatedAt ?? stamp,
   };

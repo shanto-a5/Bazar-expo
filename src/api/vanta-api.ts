@@ -398,7 +398,11 @@ export class VantaApi {
     return this.client.get('/catalog/categories');
   }
 
-  products(query: { page?: number; pageSize?: number; sellerId?: string; categoryId?: string; search?: string } = {}): Promise<ProductPage> {
+  areas(): Promise<{ areas: { name: string; slug: string }[] }> {
+    return this.client.get('/catalog/areas');
+  }
+
+  products(query: { page?: number; pageSize?: number; sellerId?: string; categoryId?: string; search?: string; area?: string } = {}): Promise<ProductPage> {
     return this.client.get<ProductPage>('/catalog/products', { query });
   }
 
