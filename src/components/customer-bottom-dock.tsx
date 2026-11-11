@@ -19,6 +19,7 @@ import * as React from 'react';
 import { Platform, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useLanguage } from '@/modules/language/language-context';
 import { useSession } from '@/modules/session/session-context';
 import { cartService } from '@/services/cart-service';
 import { colors, makeShadow, radius, spacing, type } from '@/theme/tokens';
@@ -73,6 +74,7 @@ export function CustomerBottomDock(): React.JSX.Element {
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
   const { cartOwnerId } = useSession();
+  const { t } = useLanguage();
 
   // Same read the home screen and cart screen use. Derived during render (rather
   // than captured on focus) so that a remote cart round trip — which ripples
@@ -91,6 +93,7 @@ export function CustomerBottomDock(): React.JSX.Element {
       {TABS.map((tab) => {
         const active = isActive(tab.href);
         const badge = tab.key === 'cart' ? cartCount : 0;
+        const localizedLabel = t(tab.key);
 
         return (
           <Pressable
@@ -99,7 +102,7 @@ export function CustomerBottomDock(): React.JSX.Element {
               if (!active) router.navigate(tab.href);
             }}
             accessibilityRole="button"
-            accessibilityLabel={tab.label}
+            accessibilityLabel={localizedLabel}
             accessibilityState={{ selected: active }}
             aria-selected={active}
             accessibilityHint={
@@ -124,7 +127,7 @@ export function CustomerBottomDock(): React.JSX.Element {
                 ) : null}
               </View>
               <Text numberOfLines={1} style={[styles.label, active ? styles.labelActive : styles.labelIdle]}>
-                {tab.label}
+                {localizedLabel}
               </Text>
             </View>
           </Pressable>

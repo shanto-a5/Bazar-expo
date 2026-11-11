@@ -7,6 +7,8 @@ import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-c
 import { QuickAccountProvider } from '@/modules/session/quick-account-modal';
 import { AreaProvider } from '@/modules/area/area-context';
 import { AreaGate } from '@/modules/area/area-gate';
+import { LanguageProvider } from '@/modules/language/language-context';
+import { QuickCommerceProvider } from '@/modules/commerce/quick-commerce';
 import { SessionProvider, useSession } from '@/modules/session/session-context';
 import { useBootGate } from '@/infrastructure/bootstrap';
 import { Button, Card } from '@/components/ui';
@@ -72,56 +74,60 @@ export default function RootLayout(): React.JSX.Element {
 
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-      <SessionProvider>
-        <PushNotificationBridge />
-        <QuickAccountProvider>
-          <View style={{ flex: 1, backgroundColor: '#FAFAF9' }}>
-            <StatusBar style="dark" />
-            <GlobalProgressLine />
-            {boot.status === 'loading' ? (
-              <View
-                style={{
-                  flex: 1,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: spacing.lg,
-                }}
-              >
-                <ActivityIndicator
-                  size="large"
-                  color={colors.primary}
-                  accessibilityLabel="Starting Vanta"
-                />
-              </View>
-            ) : null}
-            {boot.status === 'ready' ? (
-              <AreaProvider>
-                <AreaGate>
-                  <SessionStartupGate>
-                    <Stack screenOptions={{ headerShown: false }} />
-                  </SessionStartupGate>
-                </AreaGate>
-              </AreaProvider>
-            ) : null}
-            {boot.status === 'failed' ? (
-              <View
-                style={{
-                  flex: 1,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: spacing.lg,
-                }}
-              >
-                <Card style={{ width: '100%', maxWidth: 420 }}>
-                  <Text style={{ ...type.h3, marginBottom: spacing.sm }}>Vanta could not start</Text>
-                  <Text style={{ ...type.bodyMuted, marginBottom: spacing.lg }}>{boot.error.message}</Text>
-                  <Button title="Try again" fullWidth onPress={boot.retry} />
-                </Card>
-              </View>
-            ) : null}
-          </View>
-        </QuickAccountProvider>
-      </SessionProvider>
+      <LanguageProvider>
+        <SessionProvider>
+          <PushNotificationBridge />
+          <QuickAccountProvider>
+            <View style={{ flex: 1, backgroundColor: '#FAFAF9' }}>
+              <StatusBar style="dark" />
+              <GlobalProgressLine />
+              {boot.status === 'loading' ? (
+                <View
+                  style={{
+                    flex: 1,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: spacing.lg,
+                  }}
+                >
+                  <ActivityIndicator
+                    size="large"
+                    color={colors.primary}
+                    accessibilityLabel="Starting Vanta"
+                  />
+                </View>
+              ) : null}
+              {boot.status === 'ready' ? (
+                <AreaProvider>
+                  <AreaGate>
+                    <SessionStartupGate>
+                      <QuickCommerceProvider>
+                        <Stack screenOptions={{ headerShown: false }} />
+                      </QuickCommerceProvider>
+                    </SessionStartupGate>
+                  </AreaGate>
+                </AreaProvider>
+              ) : null}
+              {boot.status === 'failed' ? (
+                <View
+                  style={{
+                    flex: 1,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: spacing.lg,
+                  }}
+                >
+                  <Card style={{ width: '100%', maxWidth: 420 }}>
+                    <Text style={{ ...type.h3, marginBottom: spacing.sm }}>Vanta could not start</Text>
+                    <Text style={{ ...type.bodyMuted, marginBottom: spacing.lg }}>{boot.error.message}</Text>
+                    <Button title="Try again" fullWidth onPress={boot.retry} />
+                  </Card>
+                </View>
+              ) : null}
+            </View>
+          </QuickAccountProvider>
+        </SessionProvider>
+      </LanguageProvider>
     </SafeAreaProvider>
   );
 }

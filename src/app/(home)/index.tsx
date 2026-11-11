@@ -2,17 +2,29 @@
  * Home — the shopper's area feed.
  *
  * Deliberately bare for first-time smartphone users: a header showing the
- * selected area (tap it to change) and the grid of products sold by shops that
- * serve that area. Everything on screen comes from the cache-first catalogue
- * mirror (`useListingCache`), so a cold start renders the last saved feed
- * immediately and refreshes in the background.
+ * selected area (tap it to change), a compact expandable search bar, and the
+ * grid of products sold by shops that serve that area. Everything on screen
+ * comes from the cache-first catalogue mirror (`useListingCache`), so a cold
+ * start renders the last saved feed immediately and refreshes in the background.
  *
  * The area itself is chosen once, in the full-screen selector that the root
  * layout shows before this screen can mount (see `AreaGate`).
  */
 import * as React from 'react';
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import {
+  Animated,
+  FlatList,
+  Keyboard,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
+import { BlurView } from 'expo-blur';
 import { Image as ExpoImage } from 'expo-image';
 import { router, useFocusEffect } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
@@ -25,13 +37,16 @@ import { useListingCache } from '@/modules/cache/use-listing-cache';
 import { useArea } from '@/modules/area/area-context';
 import { matchAreaTokens, productsForArea } from '@/modules/area/area-logic';
 import { NoticeCard } from '@/modules/checkout/checkout-ui';
+import { useQuickCommerce } from '@/modules/commerce/quick-commerce';
+import { useLanguage } from '@/modules/language/language-context';
 import { useSession } from '@/modules/session/session-context';
 import { WishlistButton } from '@/modules/wishlist/wishlist-button';
 import type { Product } from '@/domain/types';
 import { cartService } from '@/services/cart-service';
 import { catalogService, effectivePrice } from '@/services/catalog-service';
 import { notificationService } from '@/services/notification-service';
-import { colors, radius, spacing, type } from '@/theme/tokens';
+import { searchService } from '@/services/search-service';
+import { colors, makeShadow, radius, spacing, type } from '@/theme/tokens';
 import { makePaletteImage, resolveImage } from '@/utils/image';
 
 export { matchAreaTokens };
@@ -57,7 +72,14 @@ function HomeImage({ uri, empty }: { uri?: string | null; empty?: string }): Rea
     return <View style={styles.fill} />;
   }
   if (resolved.kind === 'uri') {
-    return <ExpoImage source={resolved.uri} contentFit="cover" transition={150} style={[styles.fill, { backgroundColor: colors.surfaceMuted }]} />;
+    return (
+      <ExpoImage
+        source={resolved.uri}
+        contentFit="cover"
+        transition={150}
+        style={[styles.fill, { backgroundColor: colors.surfaceMuted }]}
+      />
+    );
   }
   return (
     <View style={[styles.fill, { alignItems: 'center', justifyContent: 'center', backgroundColor: resolved.c1 }]}>
@@ -76,7 +98,19 @@ function CountBadge({ count }: { count: number }): React.JSX.Element {
   );
 }
 
-function GridProductCard({ product, onPress }: { product: Product; onPress: () => void }): React.JSX.Element {
+function GridProductCard({
+  product,
+  onPress,
+  offSuffix,
+  newBadge,
+  soldSuffix,
+}: {
+  product: Product;
+  onPress: () => void;
+  offSuffix: string;
+  newBadge: string;
+  soldSuffix: string;
+}): React.JSX.Element {
   const off = discountOff(product);
   const price = effectivePrice(product);
   return (
@@ -87,10 +121,13 @@ function GridProductCard({ product, onPress }: { product: Product; onPress: () =
       style={({ pressed }) => [styles.gridCard, pressed && styles.pressed]}
     >
       <View style={styles.gridImage}>
-        <HomeImage uri={product.images?.[0]} />
+        <HomeImage uri={product.images?.[0]} empty={product.name} />
         {off > 0 ? (
           <View style={styles.offBadge}>
-            <Text style={styles.offBadgeText}>{off}% OFF</Text>
+            <Text style={styles.offBadgeText}>
+              {off}
+              {offSuffix}
+            </Text>
           </View>
         ) : null}
         <View style={styles.wishSlot}>
@@ -112,9 +149,13 @@ function GridProductCard({ product, onPress }: { product: Product; onPress: () =
               {product.ratingAvg.toFixed(1)}
             </Text>
           ) : (
-            <Text style={styles.gridMeta}>New</Text>
+            <Text style={styles.gridMeta}>{newBadge}</Text>
           )}
-          {product.soldCount > 0 ? <Text style={styles.gridMeta}>{compactNumber(product.soldCount)} sold</Text> : null}
+          {product.soldCount > 0 ? (
+            <Text style={styles.gridMeta}>
+              {compactNumber(product.soldCount)} {soldSuffix}
+            </Text>
+          ) : null}
         </View>
       </View>
     </Pressable>
@@ -124,23 +165,35 @@ function GridProductCard({ product, onPress }: { product: Product; onPress: () =
 export default function HomeScreen(): React.JSX.Element {
   const { user, cartOwnerId } = useSession();
   const { area, openSelector } = useArea();
+  const { t } = useLanguage();
+  const { openQuickView, openMiniCart, cartBounceScale } = useQuickCommerce();
   const insets = useSafeAreaInsets();
   const dockClearance = useCustomerDockClearance() ?? 0;
 
-  const [cartCount, setCartCount] = React.useState(0);
   const [notifCount, setNotifCount] = React.useState(0);
+  const [searchFocused, setSearchFocused] = React.useState(false);
+  const [searchQuery, setSearchQuery] = React.useState('');
+  const [recentSearches, setRecentSearches] = React.useState<string[]>([]);
+  const searchInputRef = React.useRef<React.ComponentRef<typeof TextInput> | null>(null);
+
+  const cartCount = cartService.itemCount(cartOwnerId);
+
   useFocusEffect(
     React.useCallback(() => {
-      setCartCount(cartService.itemCount(cartOwnerId));
       setNotifCount(user ? notificationService.unreadCount(user.id) : 0);
-    }, [cartOwnerId, user]),
+      setRecentSearches(user ? searchService.history(user.id, 6) : []);
+    }, [user]),
   );
 
-  const { loaded: catalogLoaded, refreshing, refresh, retry: retryHome, error: homeError, version } = useListingCache(cartOwnerId, 'home');
+  const {
+    loaded: catalogLoaded,
+    refreshing,
+    refresh,
+    retry: retryHome,
+    error: homeError,
+    version,
+  } = useListingCache(cartOwnerId, 'home');
 
-  // Every read pulls from the device mirror synchronously. `version` ticks
-  // whenever a background or pull-to-refresh read settles, so the memo lists it
-  // as a dependency and reads it (`void version`) to recompute on that tick.
   const areaSlug = area?.slug ?? '';
   const products = React.useMemo(() => {
     void version;
@@ -155,42 +208,145 @@ export default function HomeScreen(): React.JSX.Element {
     return productsForArea(all, catalogService.visibleStores(), areaSlug);
   }, [version, areaSlug]);
 
+  // Filter grid products if user typed a search query
+  const displayedProducts = React.useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter((p) => {
+      const hay = `${p.name} ${p.brand} ${p.description}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [products, searchQuery]);
+
+  // Suggestions shown directly below the expanded search bar
+  const keywordSuggestions = React.useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const pool = new Set<string>();
+    for (const term of recentSearches) {
+      if (!q || term.toLowerCase().includes(q)) pool.add(term);
+    }
+    for (const p of products) {
+      if (!q || p.name.toLowerCase().includes(q)) {
+        pool.add(p.name);
+      }
+      if (p.brand && (!q || p.brand.toLowerCase().includes(q))) {
+        pool.add(p.brand);
+      }
+      if (pool.size >= 6) break;
+    }
+    return Array.from(pool).slice(0, 5);
+  }, [products, recentSearches, searchQuery]);
+
+  const productSuggestions = React.useMemo(() => {
+    return displayedProducts.slice(0, 5);
+  }, [displayedProducts]);
+
+  const collapseSearch = React.useCallback(() => {
+    setSearchFocused(false);
+    searchInputRef.current?.blur();
+    Keyboard.dismiss();
+  }, []);
+
+  const handleSelectKeyword = React.useCallback(
+    (term: string) => {
+      setSearchQuery(term);
+      if (user && term.trim()) {
+        searchService.recordHistory(user.id, term.trim());
+        setRecentSearches(searchService.history(user.id, 6));
+      }
+      collapseSearch();
+    },
+    [user, collapseSearch],
+  );
+
+  const handleSelectSuggestedProduct = React.useCallback(
+    (product: Product) => {
+      if (user && searchQuery.trim()) {
+        searchService.recordHistory(user.id, searchQuery.trim());
+      }
+      collapseSearch();
+      openQuickView(product);
+    },
+    [user, searchQuery, collapseSearch, openQuickView],
+  );
+
   const waitingForCatalog = !catalogLoaded && products.length === 0;
 
   const header = (
-    <View style={[styles.header, { paddingTop: insets.top }]}>
+    <View style={[styles.header, { paddingTop: insets.top }, searchFocused && styles.headerElevated]}>
       <View style={styles.headerInner}>
-        <Logo size={30} />
-        <Pressable
-          onPress={openSelector}
-          accessibilityRole="button"
-          accessibilityLabel={`Your area: ${area?.name ?? ''}. Tap to change.`}
-          style={({ pressed }) => [styles.areaChip, pressed && styles.pressed]}
-        >
-          <Text style={styles.areaPin}>📍</Text>
-          <Text style={styles.areaName} numberOfLines={1}>
-            {area?.name ?? ''}
-          </Text>
-          <Text style={styles.areaChange}>▾</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => router.push('/search')}
-          accessibilityRole="button"
-          accessibilityLabel="Search products"
-          style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
-        >
+        {!searchFocused ? (
+          <>
+            <Logo size={30} />
+            <Pressable
+              onPress={openSelector}
+              accessibilityRole="button"
+              accessibilityLabel={`${t('yourArea')}: ${area?.name ?? ''}. ${t('tapToChange')}`}
+              style={({ pressed }) => [styles.areaChip, pressed && styles.pressed]}
+            >
+              <Text style={styles.areaPin}>📍</Text>
+              <Text style={styles.areaName} numberOfLines={1}>
+                {area?.name ?? ''}
+              </Text>
+              <Text style={styles.areaChange}>▾</Text>
+            </Pressable>
+          </>
+        ) : null}
+
+        {/* STEP 1: Compact resting search bar that expands to full screen width onFocus */}
+        <View style={searchFocused ? styles.searchExpandedContainer : styles.searchCompactContainer}>
           <SymbolView
             name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
-            size={20}
+            size={16}
             weight={ICON_WEIGHT}
-            tintColor={colors.textInverse}
+            tintColor={searchFocused ? colors.primary : colors.textMuted}
           />
-        </Pressable>
-        {user ? (
+          <TextInput
+            ref={searchInputRef}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+            placeholder={t('searchPlaceholder')}
+            placeholderTextColor={colors.textMuted}
+            returnKeyType="search"
+            onSubmitEditing={() => {
+              if (user && searchQuery.trim()) {
+                searchService.recordHistory(user.id, searchQuery.trim());
+                setRecentSearches(searchService.history(user.id, 6));
+              }
+              collapseSearch();
+            }}
+            style={searchFocused ? styles.searchInputExpanded : styles.searchInputCompact}
+            accessibilityLabel={t('search')}
+          />
+          {searchQuery.length > 0 ? (
+            <Pressable
+              onPress={() => setSearchQuery('')}
+              accessibilityRole="button"
+              accessibilityLabel={t('clearHistory')}
+              style={styles.clearInputBtn}
+            >
+              <Text style={styles.clearInputText}>✕</Text>
+            </Pressable>
+          ) : null}
+          {searchFocused ? (
+            <Pressable
+              onPress={collapseSearch}
+              accessibilityRole="button"
+              accessibilityLabel={t('close')}
+              style={({ pressed }) => [styles.cancelSearchChip, pressed && styles.pressed]}
+            >
+              <Text style={styles.cancelSearchText}>{t('close')}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+
+        {!searchFocused && user ? (
           <Pressable
             onPress={() => router.push('/notifications')}
             accessibilityRole="button"
-            accessibilityLabel="Notifications"
+            accessibilityLabel={t('notifications')}
             style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
           >
             <SymbolView
@@ -202,76 +358,181 @@ export default function HomeScreen(): React.JSX.Element {
             {notifCount > 0 ? <CountBadge count={notifCount} /> : null}
           </Pressable>
         ) : null}
-        <Pressable
-          onPress={() => router.push('/cart')}
-          accessibilityRole="button"
-          accessibilityLabel="My cart"
-          style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
-        >
-          <SymbolView
-            name={{ ios: 'cart', android: 'shopping_cart', web: 'shopping_cart' }}
-            size={20}
-            weight={ICON_WEIGHT}
-            tintColor={colors.textInverse}
-          />
-          {cartCount > 0 ? <CountBadge count={cartCount} /> : null}
-        </Pressable>
+
+        {!searchFocused ? (
+          <Animated.View style={{ transform: [{ scale: cartBounceScale }] }}>
+            <Pressable
+              onPress={openMiniCart}
+              accessibilityRole="button"
+              accessibilityLabel={t('myCart')}
+              style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+            >
+              <SymbolView
+                name={{ ios: 'cart', android: 'shopping_cart', web: 'shopping_cart' }}
+                size={20}
+                weight={ICON_WEIGHT}
+                tintColor={colors.textInverse}
+              />
+              {cartCount > 0 ? <CountBadge count={cartCount} /> : null}
+            </Pressable>
+          </Animated.View>
+        ) : null}
       </View>
+
+      {/* STEP 1: Search suggestions directly below the expanded search input */}
+      {searchFocused ? (
+        <View style={styles.suggestionsDropdown}>
+          <ScrollView
+            keyboardShouldPersistTaps="always"
+            showsVerticalScrollIndicator={false}
+            style={styles.suggestionsScroll}
+            contentContainerStyle={{ gap: spacing.sm, paddingBottom: spacing.sm }}
+          >
+            {keywordSuggestions.length > 0 ? (
+              <View style={{ gap: spacing.xs }}>
+                <Text style={styles.suggestionHeading}>{t('suggestedSearches')}</Text>
+                <View style={styles.keywordWrap}>
+                  {keywordSuggestions.map((term) => (
+                    <Pressable
+                      key={term}
+                      onPress={() => handleSelectKeyword(term)}
+                      accessibilityRole="button"
+                      accessibilityLabel={term}
+                      style={({ pressed }) => [styles.keywordChip, pressed && styles.pressed]}
+                    >
+                      <Text numberOfLines={1} style={styles.keywordChipText}>
+                        🔍 {term}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+
+            <View style={{ gap: spacing.xs }}>
+              <Text style={styles.suggestionHeading}>{t('matchingProducts')}</Text>
+              {productSuggestions.length === 0 ? (
+                <Text style={styles.noMatchText}>{t('noSearchMatches')}</Text>
+              ) : (
+                productSuggestions.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    onPress={() => handleSelectSuggestedProduct(item)}
+                    accessibilityRole="button"
+                    accessibilityLabel={item.name}
+                    style={({ pressed }) => [styles.suggestionProductRow, pressed && styles.pressed]}
+                  >
+                    <View style={styles.suggestionThumb}>
+                      <HomeImage uri={item.images?.[0]} empty={item.name} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text numberOfLines={1} style={styles.suggestionProductName}>
+                        {item.name}
+                      </Text>
+                      <Text style={styles.suggestionProductPrice}>{taka(effectivePrice(item))}</Text>
+                    </View>
+                  </Pressable>
+                ))
+              )}
+            </View>
+          </ScrollView>
+        </View>
+      ) : null}
     </View>
   );
 
   return (
     <View style={styles.screen}>
       {header}
-      <FlatList
-        data={products}
-        keyExtractor={(p) => p.id}
-        numColumns={2}
-        columnWrapperStyle={{ gap: spacing.md }}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.primary} colors={[colors.primary]} />
-        }
-        contentContainerStyle={{
-          gap: spacing.md,
-          padding: spacing.lg,
-          paddingBottom: dockClearance + insets.bottom + spacing.xxl,
-        }}
-        style={{ flex: 1 }}
-        ListHeaderComponent={
-          homeError ? (
-            <NoticeCard
-              tone="warning"
-              title="Couldn't refresh"
-              message={`${homeError} Showing the last saved catalogue.`}
-              actionLabel="Try again"
-              onAction={retryHome}
+      <View style={styles.fill}>
+        <FlatList
+          data={displayedProducts}
+          keyExtractor={(p) => p.id}
+          numColumns={2}
+          columnWrapperStyle={{ gap: spacing.md }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={refresh}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
             />
-          ) : undefined
-        }
-        renderItem={({ item }) => (
-          <GridProductCard
-            product={item}
-            onPress={() => router.push({ pathname: '/product/[id]', params: { id: item.id } })}
-          />
-        )}
-        ListEmptyComponent={
-          waitingForCatalog ? (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }} accessibilityLabel="Loading products">
-              {[0, 1, 2, 3].map((key) => (
-                <View key={key} style={{ flex: 1, minWidth: '44%', height: 210, borderRadius: radius.lg, backgroundColor: colors.surfaceMuted }} />
-              ))}
-            </View>
-          ) : (
-            <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>No shops are available here yet. We have notified local sellers!</Text>
-              <Text style={styles.emptyBangla}>এখানে এখনো কোনো দোকান নেই। আমরা স্থানীয় বিক্রেতাদের জানিয়েছি!</Text>
-              <Pressable onPress={openSelector} accessibilityRole="button" style={({ pressed }) => [styles.emptyAction, pressed && styles.pressed]}>
-                <Text style={styles.emptyActionText}>Choose another area · অন্য এলাকা বাছাই করুন</Text>
-              </Pressable>
-            </View>
-          )
-        }
-      />
+          }
+          contentContainerStyle={{
+            gap: spacing.md,
+            padding: spacing.lg,
+            paddingBottom: dockClearance + insets.bottom + spacing.xxl,
+          }}
+          style={{ flex: 1 }}
+          ListHeaderComponent={
+            homeError ? (
+              <NoticeCard
+                tone="warning"
+                title={t('couldntRefresh')}
+                message={`${homeError} ${t('showingSavedCatalogue')}`}
+                actionLabel={t('tryAgain')}
+                onAction={retryHome}
+              />
+            ) : undefined
+          }
+          renderItem={({ item }) => (
+            <GridProductCard
+              product={item}
+              offSuffix={t('offSuffix')}
+              newBadge={t('newBadge')}
+              soldSuffix={t('soldSuffix')}
+              onPress={() => openQuickView(item)}
+            />
+          )}
+          ListEmptyComponent={
+            waitingForCatalog ? (
+              <View
+                style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}
+                accessibilityLabel={t('loadingProducts')}
+              >
+                {[0, 1, 2, 3].map((key) => (
+                  <View
+                    key={key}
+                    style={{
+                      flex: 1,
+                      minWidth: '44%',
+                      height: 210,
+                      borderRadius: radius.lg,
+                      backgroundColor: colors.surfaceMuted,
+                    }}
+                  />
+                ))}
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                <Text style={styles.emptyTitle}>{t('emptyAreaPrimary')}</Text>
+                <Text style={styles.emptyBangla}>{t('emptyAreaSecondary')}</Text>
+                <Pressable
+                  onPress={openSelector}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('chooseAnotherArea')}
+                  style={({ pressed }) => [styles.emptyAction, pressed && styles.pressed]}
+                >
+                  <Text style={styles.emptyActionText}>{t('chooseAnotherArea')}</Text>
+                </Pressable>
+              </View>
+            )
+          }
+        />
+
+        {/* STEP 1: Full-screen blurred backdrop over the rest of the app when search is focused */}
+        {searchFocused ? (
+          <View style={[StyleSheet.absoluteFill, styles.blurOverlayWrap]}>
+            <BlurView tint="dark" intensity={50} style={StyleSheet.absoluteFill} />
+            <Pressable
+              onPress={collapseSearch}
+              accessibilityRole="button"
+              accessibilityLabel={t('close')}
+              style={[StyleSheet.absoluteFill, styles.blurDimScrim]}
+            />
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -284,6 +545,7 @@ const styles = StyleSheet.create({
   fill: {
     width: '100%',
     height: '100%',
+    flex: 1,
   },
   pressed: {
     opacity: 0.8,
@@ -291,36 +553,176 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: colors.primary,
+    zIndex: 10,
+  },
+  headerElevated: {
+    zIndex: 50,
+    elevation: 20,
   },
   headerInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
     paddingBottom: spacing.md,
   },
   areaChip: {
     flex: 1,
+    minWidth: 84,
     height: 40,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.md,
+    gap: 4,
+    paddingHorizontal: spacing.sm,
     backgroundColor: colors.surface,
     borderRadius: radius.pill,
   },
   areaPin: {
-    fontSize: 14,
+    fontSize: 13,
   },
   areaName: {
-    ...type.h3,
+    fontSize: 13,
+    fontWeight: '700',
     color: colors.text,
     flex: 1,
   },
   areaChange: {
     ...type.caption,
     color: colors.textMuted,
+  },
+  searchCompactContainer: {
+    width: 112,
+    height: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.pill,
+  },
+  searchExpandedContainer: {
+    flex: 1,
+    width: '100%',
+    height: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.pill,
+    ...makeShadow(2),
+  },
+  searchInputCompact: {
+    flex: 1,
+    fontSize: 12,
+    color: colors.text,
+    paddingVertical: 0,
+  },
+  searchInputExpanded: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
+    paddingVertical: 0,
+  },
+  clearInputBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clearInputText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.textMuted,
+  },
+  cancelSearchChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.primarySoft,
+  },
+  cancelSearchText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.primaryDark,
+  },
+  suggestionsDropdown: {
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
+    borderBottomLeftRadius: radius.xl,
+    borderBottomRightRadius: radius.xl,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    ...makeShadow(3),
+  },
+  suggestionsScroll: {
+    maxHeight: 300,
+  },
+  suggestionHeading: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+  },
+  keywordWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  keywordChip: {
+    backgroundColor: colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+  },
+  keywordChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  noMatchText: {
+    fontSize: 12,
+    color: colors.textMuted,
+    paddingVertical: spacing.xs,
+  },
+  suggestionProductRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  suggestionThumb: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.sm,
+    overflow: 'hidden',
+    backgroundColor: colors.surfaceMuted,
+  },
+  suggestionProductName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  suggestionProductPrice: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: colors.primary,
+  },
+  blurOverlayWrap: {
+    zIndex: 30,
+  },
+  blurDimScrim: {
+    backgroundColor: 'rgba(15, 23, 42, 0.38)',
   },
   iconButton: {
     width: 40,

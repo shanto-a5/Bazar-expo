@@ -309,6 +309,7 @@ function detectFreeShippingThreshold(group: PricedCart['groups'][number]): numbe
 export class CartService {
   private remote = new Map<string, RemoteCartState>();
   private listeners = new Set<() => void>();
+  private addListeners = new Set<() => void>();
 
   private isRemoteUser(userId: string): boolean {
     return userId !== GUEST_CART_OWNER_ID;
@@ -384,8 +385,18 @@ export class CartService {
     return () => this.listeners.delete(listener);
   }
 
+  /** Triggered whenever an item is added to the cart (for header icon bounce animation). */
+  subscribeAddItem(listener: () => void): () => void {
+    this.addListeners.add(listener);
+    return () => this.addListeners.delete(listener);
+  }
+
   private notify(): void {
     for (const listener of this.listeners) listener();
+  }
+
+  private notifyAddItem(): void {
+    for (const listener of this.addListeners) listener();
   }
 
   /**
@@ -739,6 +750,7 @@ export class CartService {
       // screen shows an optimistic confirmation; a failure (unknown product,
       // listing not visible, revoked session) surfaces as an ApiError and is
       // logged here without crashing the UI.
+      this.notifyAddItem();
       this.enqueue(userId, () => vantaApi.addCartItem({ productId, quantity, variantId }));
       return;
     }
@@ -784,6 +796,8 @@ export class CartService {
     }
     cart.updatedAt = now;
     repositories.carts.upsert({ ...cart });
+    this.notify();
+    this.notifyAddItem();
   }
 
   /**
@@ -794,6 +808,7 @@ export class CartService {
    */
   addItemAsync(userId: string, productId: string, quantity = 1, variantId?: string): Promise<void> {
     if (this.isRemoteUser(userId)) {
+      this.notifyAddItem();
       return this.enqueueAsync(userId, () => vantaApi.addCartItem({ productId, quantity, variantId }));
     }
     try {
@@ -820,6 +835,7 @@ export class CartService {
     // just because they nudged its quantity.
     cart.updatedAt = new Date().toISOString();
     repositories.carts.upsert({ ...cart });
+    this.notify();
   }
 
   removeItem(userId: string, itemId: string): void {
@@ -832,6 +848,7 @@ export class CartService {
     cart.items = cart.items.filter((i) => i.id !== itemId);
     cart.updatedAt = new Date().toISOString();
     repositories.carts.upsert({ ...cart });
+    this.notify();
   }
 
   setSelected(userId: string, itemId: string, selected: boolean): void {
@@ -845,6 +862,7 @@ export class CartService {
     if (item) item.selected = selected;
     cart.updatedAt = new Date().toISOString();
     repositories.carts.upsert({ ...cart });
+    this.notify();
   }
 
   setSellerSelected(userId: string, sellerId: string, selected: boolean): void {
@@ -859,6 +877,7 @@ export class CartService {
     }
     cart.updatedAt = new Date().toISOString();
     repositories.carts.upsert({ ...cart });
+    this.notify();
   }
 
   selectAll(userId: string, selected: boolean): void {
@@ -871,6 +890,7 @@ export class CartService {
     for (const item of cart.items) item.selected = selected;
     cart.updatedAt = new Date().toISOString();
     repositories.carts.upsert({ ...cart });
+    this.notify();
   }
 
   clear(userId: string): void {
@@ -884,6 +904,7 @@ export class CartService {
       cart.items = [];
       cart.updatedAt = new Date().toISOString();
       repositories.carts.upsert({ ...cart });
+      this.notify();
     }
   }
 
@@ -904,6 +925,7 @@ export class CartService {
       cart.items = cart.items.filter((i) => !i.selected);
       cart.updatedAt = new Date().toISOString();
       repositories.carts.upsert({ ...cart });
+      this.notify();
     }
   }
 
