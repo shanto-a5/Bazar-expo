@@ -20,6 +20,7 @@
  * unreadable reverse geocode still creates the account and lets the address be
  * typed at checkout.
  */
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { BlurView, BlurTargetView } from 'expo-blur';
 import * as React from 'react';
@@ -38,6 +39,7 @@ import {
 import type { ComponentRef } from 'react';
 
 import { Button, Field, Logo } from '@/components/ui';
+import { useLanguage } from '@/modules/language/language-context';
 import { useSession } from '@/modules/session/session-context';
 import { addressService } from '@/services/address-service';
 import { colors, makeShadow, radius, spacing, type } from '@/theme/tokens';
@@ -45,6 +47,7 @@ import { colors, makeShadow, radius, spacing, type } from '@/theme/tokens';
 /** The same shape the API accepts, so a number that passes here is accepted there. */
 const PHONE_RE = /^[0-9+\-\s]{6,20}$/;
 const POSTAL_RE = /^\d{4}$/;
+const CACHED_GPS_STORAGE_KEY = 'bazar.cached_gps.v1';
 
 type Coordinates = { latitude: number; longitude: number };
 
@@ -79,55 +82,123 @@ async function resolveMapCoordinates(value: string): Promise<Coordinates | null>
 }
 
 /** The address fields reverse geocoding can supply, any of which may be empty. */
-interface CapturedAddress {
+export interface CapturedAddress {
   division: string;
   district: string;
   area: string;
   addressLine: string;
   postalCode: string;
+  latitude: number;
+  longitude: number;
+}
+
+let cachedQuickLocation: CapturedAddress | null = null;
+let prefetchStarted = false;
+
+export function getCachedQuickLocation(): CapturedAddress | null {
+  return cachedQuickLocation;
+}
+
+function setCachedQuickLocation(next: CapturedAddress | null): void {
+  cachedQuickLocation = next;
+  if (next) {
+    void AsyncStorage.setItem(CACHED_GPS_STORAGE_KEY, JSON.stringify(next)).catch(() => undefined);
+  } else {
+    void AsyncStorage.removeItem(CACHED_GPS_STORAGE_KEY).catch(() => undefined);
+  }
 }
 
 /**
- * Best-effort "where am I". Resolves `null` when permission is refused or the fix
- * fails; a refused permission is a normal answer, not an error, because the
- * account can still be created and the address typed at checkout. Coordinates
- * are captured independently of reverse geocoding so GPS-only addresses work
- * internationally.
+ * Upfront, non-blocking GPS prefetch on app launch.
+ *
+ * Immediately requests foreground location permissions. If granted, reads
+ * `Location.getLastKnownPositionAsync()` first for instant results, falling back
+ * to `Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })`.
+ * Coordinates are stored immediately in memory and AsyncStorage so Quick Account
+ * can consume them with zero wait.
  */
-async function captureAddress(): Promise<(CapturedAddress & { latitude?: number; longitude?: number }) | null> {
-  const permission = await Location.requestForegroundPermissionsAsync();
-  if (permission.status !== 'granted') return null;
+export function prefetchQuickLocation(): void {
+  if (prefetchStarted) return;
+  prefetchStarted = true;
 
-  let position: Location.LocationObject;
-  try {
-    position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-  } catch {
-    return null;
-  }
+  void (async () => {
+    try {
+      const savedRaw = await AsyncStorage.getItem(CACHED_GPS_STORAGE_KEY).catch(() => null);
+      if (savedRaw && !cachedQuickLocation) {
+        try {
+          const parsed = JSON.parse(savedRaw) as Partial<CapturedAddress>;
+          const valid =
+            typeof parsed.latitude === 'number' && typeof parsed.longitude === 'number'
+              ? validCoordinates(parsed.latitude, parsed.longitude)
+              : null;
+          if (valid) {
+            cachedQuickLocation = {
+              division: parsed.division ?? '',
+              district: parsed.district ?? '',
+              area: parsed.area ?? '',
+              addressLine: parsed.addressLine ?? '',
+              postalCode: parsed.postalCode ?? '',
+              latitude: valid.latitude,
+              longitude: valid.longitude,
+            };
+          }
+        } catch {
+          /* ignore corrupt storage */
+        }
+      }
 
-  let place: Location.LocationGeocodedAddress | null = null;
-  try {
-    const results = await Location.reverseGeocodeAsync({
-      latitude: position.coords.latitude,
-      longitude: position.coords.longitude,
-    });
-    place = results[0] ?? null;
-  } catch {
-    place = null;
-  }
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== 'granted') {
+        setCachedQuickLocation(null);
+        return;
+      }
 
-  const addressLine = place
-    ? [place.streetNumber, place.street ?? place.name].filter(Boolean).join(' ').trim()
-    : '';
-  return {
-    division: place?.region ?? '',
-    district: place?.city ?? place?.subregion ?? '',
-    area: place?.district ?? place?.subregion ?? place?.city ?? '',
-    addressLine,
-    postalCode: place?.postalCode ?? '',
-    latitude: position.coords.latitude,
-    longitude: position.coords.longitude,
-  };
+      let position = await Location.getLastKnownPositionAsync().catch(() => null);
+      if (!position) {
+        position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).catch(() => null);
+      }
+      if (!position) return;
+
+      const coords = validCoordinates(position.coords.latitude, position.coords.longitude);
+      if (!coords) return;
+
+      const baseCaptured: CapturedAddress = {
+        division: '',
+        district: '',
+        area: '',
+        addressLine: '',
+        postalCode: '',
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+      };
+      setCachedQuickLocation(baseCaptured);
+
+      // Enrich with reverse geocoding in the background without blocking coordinate availability
+      try {
+        const results = await Location.reverseGeocodeAsync({
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+        });
+        const place = results[0] ?? null;
+        if (place) {
+          const addressLine = [place.streetNumber, place.street ?? place.name].filter(Boolean).join(' ').trim();
+          setCachedQuickLocation({
+            division: place.region ?? '',
+            district: place.city ?? place.subregion ?? '',
+            area: place.district ?? place.subregion ?? place.city ?? '',
+            addressLine,
+            postalCode: place.postalCode ?? '',
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+          });
+        }
+      } catch {
+        /* reverse geocode is optional */
+      }
+    } catch {
+      /* location prefetch is best-effort */
+    }
+  })();
 }
 
 export interface QuickAccountRequest {
@@ -163,6 +234,10 @@ export function QuickAccountProvider({ children }: { children: React.ReactNode }
   // A stable animation value. Held in state (not a ref) so it can be read during
   // render for the interpolations without tripping the refs-during-render rule.
   const [progress] = React.useState(() => new Animated.Value(0));
+
+  React.useEffect(() => {
+    prefetchQuickLocation();
+  }, []);
 
   const present = React.useCallback((next: QuickAccountRequest = {}) => {
     setRequest(next);
@@ -209,7 +284,11 @@ export function QuickAccountProvider({ children }: { children: React.ReactNode }
             blurTarget={targetRef}
             progress={progress}
             onClose={() => close(request.onDismiss)}
-            onSuccess={() => close(request.onAuthenticated)}
+            onSuccess={() => {
+              const after = request.onAuthenticated;
+              setRequest(null);
+              after?.();
+            }}
           />
         ) : null}
       </View>
@@ -229,10 +308,12 @@ function QuickAccountOverlay({
   onSuccess: () => void;
 }): React.JSX.Element {
   const { quickAccount } = useSession();
+  const { t } = useLanguage();
   const [phone, setPhone] = React.useState('');
   const [fieldError, setFieldError] = React.useState<string | undefined>(undefined);
   const [formError, setFormError] = React.useState<string | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
+  const [locationFallback, setLocationFallback] = React.useState(false);
   const [manualLocation, setManualLocation] = React.useState('');
   const [manualCoordinates, setManualCoordinates] = React.useState<Coordinates | null>(null);
   const [locationError, setLocationError] = React.useState<string | null>(null);
@@ -250,8 +331,20 @@ function QuickAccountOverlay({
       return;
     }
     setFieldError(undefined);
-    let manual = manualCoordinates;
-    if (locationMode === 'manual') {
+
+    let captured: ( Omit<CapturedAddress, 'latitude' | 'longitude'> & { latitude?: number; longitude?: number } ) | null = null;
+
+    if (locationMode === 'gps') {
+      // Read the globally cached GPS coordinates from Step 1 without re-fetching.
+      const cached = getCachedQuickLocation();
+      if (!cached) {
+        // Permission was denied or coordinates are null: immediately show manual fallback without waiting.
+        setLocationFallback(true);
+        return;
+      }
+      captured = cached;
+    } else if (locationMode === 'manual') {
+      let manual = manualCoordinates;
       setLocationError(null);
       setResolvingLocation(true);
       manual = await resolveMapCoordinates(manualLocation);
@@ -260,16 +353,11 @@ function QuickAccountOverlay({
         setLocationError('Enter valid latitude, longitude coordinates or a Google Maps link that includes them.');
         return;
       }
+      captured = { division: '', district: '', area: '', addressLine: '', postalCode: '', ...manual };
     }
+
     setSubmitting(true);
     try {
-      // Location is captured before the account exists: the permission prompt and
-      // a fix are slow, and there is no reason to mint an account only to find the
-      // customer refused.
-      const captured = locationMode === 'manual'
-        ? { division: '', district: '', area: '', addressLine: '', postalCode: '', ...manual! }
-        : locationMode === 'gps' ? await captureAddress().catch(() => null) : null;
-
       const user = await quickAccount(trimmed);
 
       if (captured) {
@@ -364,76 +452,80 @@ function QuickAccountOverlay({
               error={fieldError}
               hint="We only use this to reach you about your orders."
               returnKeyType="done"
-              onSubmitEditing={() => void run('none')}
+              onSubmitEditing={() => void run(locationFallback && manualLocation.trim() ? 'manual' : 'gps')}
             />
-
-            <View style={styles.locationBox}>
-              <Text style={{ ...type.h3, color: colors.text, marginBottom: spacing.xs }}>Use coordinates from Google Maps</Text>
-              <Text style={{ ...type.caption, marginBottom: spacing.sm }}>
-                If your device can&apos;t share its location, open Google Maps and paste a coordinate pair or Maps link here. Location is optional.
-              </Text>
-              <Pressable
-                onPress={() => void Linking.openURL('https://maps.google.com/?q=My%20Location').catch(() => undefined)}
-                style={{ paddingVertical: spacing.xs, alignSelf: 'flex-start' }}
-                accessibilityRole="link"
-              >
-                <Text style={{ ...type.caption, color: colors.accent, textDecorationLine: 'underline' }}>Open Google Maps</Text>
-              </Pressable>
-              <Field
-                label="Coordinates or Google Maps link"
-                value={manualLocation}
-                onChangeText={(value) => {
-                  setManualLocation(value);
-                  setManualCoordinates(parseCoordinates(value));
-                  setLocationError(null);
-                }}
-                placeholder="23.8103, 90.4125 or paste a Maps link"
-                error={locationError}
-                hint="Example: 23.8103, 90.4125"
-                returnKeyType="done"
-                onSubmitEditing={() => { if (manualLocation.trim()) void run('manual'); }}
-              />
-              {manualLocation.trim() ? (
-                <Button
-                  title="Continue with these coordinates"
-                  onPress={() => void run('manual')}
-                  loading={submitting || resolvingLocation}
-                  disabled={submitting || resolvingLocation}
-                  fullWidth
-                />
-              ) : (
-                <>
-                  <Button
-                    title="Use my current location & continue"
-                    onPress={() => void run('gps')}
-                    loading={submitting}
-                    disabled={submitting}
-                    fullWidth
-                  />
-                  <View style={{ height: spacing.sm }} />
-                  <Button
-                    title="Continue without location"
-                    variant="secondary"
-                    onPress={() => void run('none')}
-                    disabled={submitting}
-                    fullWidth
-                  />
-                </>
-              )}
-              {manualLocation.trim() ? (
-                <Pressable onPress={() => void run('none')} disabled={submitting} style={styles.optionalAction}>
-                  <Text style={{ ...type.caption, color: colors.textMuted }}>Continue without location</Text>
-                </Pressable>
-              ) : null}
-              <Pressable onPress={() => void run('gps')} disabled={submitting} style={styles.optionalAction}>
-                <Text style={{ ...type.caption, color: colors.accent }}>Try my current location (optional)</Text>
-              </Pressable>
-            </View>
 
             {formError ? (
               <Text style={{ ...type.caption, color: colors.danger, marginBottom: spacing.sm }}>{formError}</Text>
             ) : null}
 
+            {locationFallback ? (
+              <View style={styles.locationBox}>
+                <Text style={{ ...type.h3, color: colors.text, marginBottom: spacing.xs }}>
+                  Use coordinates from Google Maps
+                </Text>
+                <Text style={{ ...type.caption, marginBottom: spacing.sm }}>
+                  Your device couldn&apos;t share its location. Open Google Maps, tap the blue dot to find your current
+                  location, then copy its coordinates or share link and paste it below. Location is optional.
+                </Text>
+                <Pressable
+                  onPress={() => void Linking.openURL('https://maps.google.com/?q=My%20Location').catch(() => undefined)}
+                  style={{ paddingVertical: spacing.xs, alignSelf: 'flex-start' }}
+                  accessibilityRole="link"
+                >
+                  <Text style={{ ...type.caption, color: colors.accent, textDecorationLine: 'underline' }}>
+                    Open Google Maps
+                  </Text>
+                </Pressable>
+                <Field
+                  label="Coordinates or Google Maps link"
+                  value={manualLocation}
+                  onChangeText={(value) => {
+                    setManualLocation(value);
+                    setManualCoordinates(parseCoordinates(value));
+                    setLocationError(null);
+                  }}
+                  placeholder="23.8103, 90.4125 or paste a Maps link"
+                  error={locationError}
+                  hint="Example: 23.8103, 90.4125"
+                  returnKeyType="done"
+                  onSubmitEditing={() => void run('manual')}
+                />
+                <Button
+                  title={t('confirmOrder')}
+                  onPress={() => void run('manual')}
+                  loading={submitting || resolvingLocation}
+                  disabled={submitting || resolvingLocation}
+                  fullWidth
+                />
+                <View style={{ height: spacing.sm }} />
+                <Button
+                  title="Continue without location"
+                  variant="secondary"
+                  onPress={() => void run('none')}
+                  disabled={submitting || resolvingLocation}
+                  fullWidth
+                />
+              </View>
+            ) : (
+              <View style={{ marginTop: spacing.sm }}>
+                <Button
+                  title="Continue with my current location"
+                  onPress={() => void run('gps')}
+                  loading={submitting}
+                  disabled={submitting}
+                  fullWidth
+                />
+                <View style={{ height: spacing.sm }} />
+                <Button
+                  title="Continue without location"
+                  variant="secondary"
+                  onPress={() => void run('none')}
+                  disabled={submitting}
+                  fullWidth
+                />
+              </View>
+            )}
           </ScrollView>
         </Animated.View>
       </KeyboardAvoidingView>

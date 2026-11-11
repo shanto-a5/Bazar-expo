@@ -4,7 +4,7 @@ import * as React from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 
-import { QuickAccountProvider } from '@/modules/session/quick-account-modal';
+import { QuickAccountProvider, prefetchQuickLocation } from '@/modules/session/quick-account-modal';
 import { AreaProvider } from '@/modules/area/area-context';
 import { AreaGate } from '@/modules/area/area-gate';
 import { LanguageProvider } from '@/modules/language/language-context';
@@ -71,6 +71,10 @@ function SessionStartupGate({ children }: { children: React.ReactNode }): React.
 
 export default function RootLayout(): React.JSX.Element {
   const boot = useBootGate();
+
+  React.useEffect(() => {
+    prefetchQuickLocation();
+  }, []);
 
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>

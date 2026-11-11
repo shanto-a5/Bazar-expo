@@ -2,7 +2,6 @@ import { Image as ExpoImage } from 'expo-image';
 import { router, usePathname } from 'expo-router';
 import * as React from 'react';
 import {
-  ActivityIndicator,
   Animated,
   BackHandler,
   Easing,
@@ -152,6 +151,7 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
   const [miniCartOpen, setMiniCartOpen] = React.useState(false);
   const [quickAccountOpen, setQuickAccountOpen] = React.useState(false);
   const [placingOrder, setPlacingOrder] = React.useState(false);
+  const [loadingStepIndex, setLoadingStepIndex] = React.useState(0);
   const [orderError, setOrderError] = React.useState<string | null>(null);
   const [orderSuccessVisible, setOrderSuccessVisible] = React.useState(false);
   const [justAddedId, setJustAddedId] = React.useState<string | null>(null);
@@ -166,6 +166,46 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
   const [miniCartAnim] = React.useState(() => new Animated.Value(0));
   const [cartBounceScale] = React.useState(() => new Animated.Value(1));
   const [successTimerProgress] = React.useState(() => new Animated.Value(1));
+  const [spinAnim] = React.useState(() => new Animated.Value(0));
+
+  const orderLoadingSteps = React.useMemo(
+    () => [
+      t('orderStepVerifyPhone'),
+      t('orderStepConfirmLocation'),
+      t('orderStepCalculateTotal'),
+      t('orderStepPrepareOrder'),
+    ],
+    [t],
+  );
+
+  // Cycle through progressive loading steps every 600ms while placingOrder is active
+  React.useEffect(() => {
+    if (!placingOrder) {
+      spinAnim.stopAnimation();
+      spinAnim.setValue(0);
+      return;
+    }
+
+    spinAnim.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 900,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+    loop.start();
+
+    const interval = setInterval(() => {
+      setLoadingStepIndex((prev) => (prev < 3 ? prev + 1 : prev));
+    }, 600);
+
+    return () => {
+      loop.stop();
+      clearInterval(interval);
+    };
+  }, [placingOrder, spinAnim]);
 
   // Subscribe to add-to-cart events to bounce the Cart header icon
   React.useEffect(() => {
@@ -245,11 +285,11 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
   // Hardware Back-Button Hijacking (STEP 3.2)
   React.useEffect(() => {
     const anyModalOpen =
-      Boolean(quickViewProduct) || miniCartOpen || quickAccountOpen || orderSuccessVisible;
+      Boolean(quickViewProduct) || miniCartOpen || quickAccountOpen || placingOrder || orderSuccessVisible;
     if (!anyModalOpen) return;
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (orderSuccessVisible) {
+      if (placingOrder || orderSuccessVisible) {
         return true;
       }
       if (quickAccountOpen) {
@@ -268,7 +308,7 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
     });
 
     return () => subscription.remove();
-  }, [quickViewProduct, miniCartOpen, quickAccountOpen, orderSuccessVisible, dismissQuickAccount, closeQuickView, closeMiniCart]);
+  }, [quickViewProduct, miniCartOpen, quickAccountOpen, placingOrder, orderSuccessVisible, dismissQuickAccount, closeQuickView, closeMiniCart]);
 
   // Show 1000ms order placed state, then auto-close & reset to Home
   const triggerOrderSuccess = React.useCallback(() => {
@@ -302,6 +342,7 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
       activeUserPhone?: string;
       target: PendingBuyTarget;
     }) => {
+      setLoadingStepIndex(0);
       setPlacingOrder(true);
       setOrderError(null);
       try {
@@ -477,6 +518,11 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
     outputRange: ['0%', '100%'],
   });
 
+  const spinRotate = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
   return (
     <QuickCommerceContext.Provider value={contextValue}>
       <View style={styles.fill}>
@@ -570,11 +616,7 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
                   accessibilityLabel={t('buyNow')}
                   style={({ pressed }) => [styles.buyNowBtn, pressed && styles.pressed]}
                 >
-                  {placingOrder ? (
-                    <ActivityIndicator size="small" color={colors.textInverse} />
-                  ) : (
-                    <Text style={styles.buyNowBtnText}>⚡ {t('buyNow')}</Text>
-                  )}
+                  <Text style={styles.buyNowBtnText}>⚡ {t('buyNow')}</Text>
                 </Pressable>
               </View>
             </Animated.View>
@@ -677,18 +719,49 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
                       accessibilityLabel={t('buyNow')}
                       style={({ pressed }) => [styles.miniCartBuyBtn, pressed && styles.pressed]}
                     >
-                      {placingOrder ? (
-                        <ActivityIndicator size="small" color={colors.textInverse} />
-                      ) : (
-                        <Text style={styles.miniCartBuyBtnText}>
-                          ⚡ {t('buyNow')} · {taka(miniCartSubtotal)}
-                        </Text>
-                      )}
+                      <Text style={styles.miniCartBuyBtnText}>
+                        ⚡ {t('buyNow')} · {taka(miniCartSubtotal)}
+                      </Text>
                     </Pressable>
                   </View>
                 </>
               )}
             </Animated.View>
+          </View>
+        ) : null}
+
+        {/* STEP 3: "Agent-like" Progressive Loading Overlay */}
+        {placingOrder ? (
+          <View style={[StyleSheet.absoluteFill, styles.centerOverlay, styles.backdropDark]}>
+            <View style={styles.agentLoadingCard}>
+              {orderLoadingSteps.slice(0, loadingStepIndex + 1).map((stepText, idx) => {
+                const isCurrent = idx === loadingStepIndex;
+                return (
+                  <View key={stepText} style={styles.agentStepRow}>
+                    {isCurrent ? (
+                      <Animated.View
+                        style={[
+                          styles.agentSpinnerRing,
+                          { transform: [{ rotate: spinRotate }] },
+                        ]}
+                      />
+                    ) : (
+                      <View style={styles.agentStepCheckBadge}>
+                        <Text style={styles.agentStepCheckText}>✓</Text>
+                      </View>
+                    )}
+                    <Text
+                      style={[
+                        styles.agentStepText,
+                        isCurrent ? styles.agentStepTextActive : styles.agentStepTextDone,
+                      ]}
+                    >
+                      {stepText}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
           </View>
         ) : null}
 
@@ -1005,6 +1078,52 @@ const styles = StyleSheet.create({
     color: colors.danger,
     fontWeight: '600',
     marginTop: 4,
+  },
+  agentLoadingCard: {
+    width: '86%',
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    padding: spacing.xl,
+    gap: spacing.md,
+    ...makeShadow(3),
+  },
+  agentStepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  agentSpinnerRing: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2.5,
+    borderStyle: 'dashed',
+    borderColor: colors.primary,
+  },
+  agentStepCheckBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#16A34A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  agentStepCheckText: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: colors.textInverse,
+  },
+  agentStepText: {
+    flex: 1,
+    fontSize: 15,
+  },
+  agentStepTextActive: {
+    fontWeight: '800',
+    color: colors.text,
+  },
+  agentStepTextDone: {
+    fontWeight: '600',
+    color: colors.textMuted,
   },
   successCard: {
     width: '86%',
