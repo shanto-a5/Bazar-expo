@@ -402,6 +402,11 @@ export class VantaApi {
     return this.client.get('/catalog/areas');
   }
 
+  /** Public: tells the marketplace a shopper's area has no shops yet. Safe to repeat. */
+  discoverArea(areaName: string): Promise<{ discovery: { id: string; requestedName: string; slug: string; requestedAt: string } }> {
+    return this.client.post('/catalog/areas/discover', { areaName }, { authenticated: false });
+  }
+
   products(query: { page?: number; pageSize?: number; sellerId?: string; categoryId?: string; search?: string; area?: string } = {}): Promise<ProductPage> {
     return this.client.get<ProductPage>('/catalog/products', { query });
   }

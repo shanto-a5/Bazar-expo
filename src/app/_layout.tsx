@@ -5,6 +5,8 @@ import { ActivityIndicator, Text, View } from 'react-native';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 
 import { QuickAccountProvider } from '@/modules/session/quick-account-modal';
+import { AreaProvider } from '@/modules/area/area-context';
+import { AreaGate } from '@/modules/area/area-gate';
 import { SessionProvider, useSession } from '@/modules/session/session-context';
 import { useBootGate } from '@/infrastructure/bootstrap';
 import { Button, Card } from '@/components/ui';
@@ -93,9 +95,13 @@ export default function RootLayout(): React.JSX.Element {
               </View>
             ) : null}
             {boot.status === 'ready' ? (
-              <SessionStartupGate>
-                <Stack screenOptions={{ headerShown: false }} />
-              </SessionStartupGate>
+              <AreaProvider>
+                <AreaGate>
+                  <SessionStartupGate>
+                    <Stack screenOptions={{ headerShown: false }} />
+                  </SessionStartupGate>
+                </AreaGate>
+              </AreaProvider>
             ) : null}
             {boot.status === 'failed' ? (
               <View

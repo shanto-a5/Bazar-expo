@@ -1,5 +1,4 @@
 import * as React from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { RefreshControl, Pressable, Text, View } from 'react-native';
 
@@ -7,6 +6,7 @@ import { router } from 'expo-router';
 
 import { BackButton } from '@/components/back-button';
 import { Button, Card, Screen, SectionHeader } from '@/components/ui';
+import { useArea } from '@/modules/area/area-context';
 import { useSession } from '@/modules/session/session-context';
 import { useListingCache } from '@/modules/cache/use-listing-cache';
 import { useFocusRefresh } from '@/modules/orders/focus-refresh';
@@ -31,8 +31,6 @@ function MenuRow({ label, caption, onPress }: { label: string; caption: string; 
   );
 }
 
-const AREA_PREF = 'bazar.area-shopping.v1';
-
 /**
  * Seller settings rows use the Vanta signature color for the option name so the
  * whole seller section reads as branded, while staying on the same row anatomy
@@ -40,21 +38,10 @@ const AREA_PREF = 'bazar.area-shopping.v1';
  */
 export default function SettingsScreen(): React.JSX.Element {
   const { status, user, signOut, signOutEverywhere } = useSession();
+  const { area, openSelector: openAreaSelector } = useArea();
   const { refreshing, refresh: refreshAccount, error: accountError, retry: retryAccount } = useListingCache(user?.id ?? '', 'account');
   const [busy, setBusy] = React.useState(false);
   const [signOutError, setSignOutError] = React.useState<string | null>(null);
-  const [viewAllProducts, setViewAllProducts] = React.useState(false);
-  React.useEffect(() => {
-    void AsyncStorage.getItem(AREA_PREF).then((raw) => { if (raw) setViewAllProducts(Boolean((JSON.parse(raw) as { all?: boolean }).all)); }).catch(() => undefined);
-  }, []);
-  const toggleViewAll = (): void => {
-    const next = !viewAllProducts;
-    setViewAllProducts(next);
-    void AsyncStorage.getItem(AREA_PREF).then((raw) => {
-      const current = raw ? JSON.parse(raw) as { area?: string } : {};
-      return AsyncStorage.setItem(AREA_PREF, JSON.stringify({ ...current, all: next }));
-    }).catch(() => undefined);
-  };
   useFocusRefresh();
   const unread = status === 'signedIn' && user ? notificationService.unreadCount(user.id) : 0;
 
@@ -112,12 +99,12 @@ export default function SettingsScreen(): React.JSX.Element {
         </View>
       ) : null}
 
-      <Card style={{ marginBottom: spacing.lg }}>
-        <Pressable onPress={toggleViewAll} accessibilityRole="switch" accessibilityState={{ checked: viewAllProducts }} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <View style={{ flex: 1, paddingRight: spacing.md }}><Text style={{ ...type.label, color: colors.text }}>View all products</Text><Text style={type.caption}>Browse shops across every service area</Text></View>
-          <Text style={{ color: viewAllProducts ? colors.primary : colors.textMuted, fontWeight: '700' }}>{viewAllProducts ? 'On' : 'Off'}</Text>
-        </Pressable>
-      </Card>
+      <MenuRow
+        label="Shopping area"
+        caption={area ? `${area.name} · Tap to change` : 'Choose where you shop'}
+        onPress={openAreaSelector}
+      />
+      <View style={{ height: spacing.lg }} />
 
       {status === 'signedIn' && user ? (
         <>
