@@ -1,5 +1,4 @@
 import { Image as ExpoImage } from 'expo-image';
-import * as Location from 'expo-location';
 import { router, usePathname } from 'expo-router';
 import * as React from 'react';
 import {
@@ -7,13 +6,10 @@ import {
   Animated,
   BackHandler,
   Easing,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,54 +18,17 @@ import { taka } from '@/components/ui';
 import type { Address, Product } from '@/domain/types';
 import { useArea } from '@/modules/area/area-context';
 import { useLanguage } from '@/modules/language/language-context';
+import { useQuickAccount } from '@/modules/session/quick-account-modal';
 import { useSession } from '@/modules/session/session-context';
 import { addressService } from '@/services/address-service';
+import { authService } from '@/services/auth-gateway';
 import { cartService } from '@/services/cart-service';
 import { catalogService, effectivePrice } from '@/services/catalog-service';
 import { orderService } from '@/services/order-service';
 import { colors, makeShadow, radius, spacing, type } from '@/theme/tokens';
 import { makePaletteImage, resolveImage } from '@/utils/image';
 
-const PHONE_RE = /^[0-9+\-\s]{6,20}$/;
 const SUCCESS_DURATION_MS = 1000;
-
-interface GpsCoords {
-  latitude: number;
-  longitude: number;
-  division?: string;
-  district?: string;
-  area?: string;
-  addressLine?: string;
-}
-
-async function fetchBestEffortGps(): Promise<GpsCoords | null> {
-  try {
-    const perm = await Location.requestForegroundPermissionsAsync();
-    if (perm.status !== 'granted') return null;
-    const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-    const latitude = pos.coords.latitude;
-    const longitude = pos.coords.longitude;
-    let division = '';
-    let district = '';
-    let area = '';
-    let addressLine = '';
-    try {
-      const places = await Location.reverseGeocodeAsync({ latitude, longitude });
-      const first = places[0];
-      if (first) {
-        division = first.region ?? '';
-        district = first.city ?? first.subregion ?? '';
-        area = first.district ?? first.subregion ?? first.city ?? '';
-        addressLine = [first.streetNumber, first.street ?? first.name].filter(Boolean).join(' ').trim();
-      }
-    } catch {
-      /* reverse geocode is optional */
-    }
-    return { latitude, longitude, division, district, area, addressLine };
-  } catch {
-    return null;
-  }
-}
 
 function resolveProductUnitLabel(product: Product, defaultLabel: string): string {
   if (product.variants && product.variants.length > 0) {
@@ -88,7 +47,6 @@ function buildOneClickAddress(params: {
   userName?: string;
   userPhone?: string;
   areaName?: string;
-  gps?: GpsCoords | null;
 }): Address {
   const cached = addressService.getDefault(params.userId);
   const activeArea = (params.areaName ?? '').trim() || 'Bangladesh';
@@ -96,21 +54,21 @@ function buildOneClickAddress(params: {
   const recipientName = rawRecipient.length >= 2 ? rawRecipient : 'Customer';
   const rawPhone = (cached?.phone || params.userPhone || '01700000000').trim();
   const phone = rawPhone.length >= 6 ? rawPhone : '01700000000';
-  const rawDivision = (params.gps?.division || cached?.division || activeArea || 'Bangladesh').trim();
+  const rawDivision = (cached?.division || activeArea || 'Bangladesh').trim();
   const division = rawDivision.length >= 2 ? rawDivision : 'Bangladesh';
-  const rawDistrict = (params.gps?.district || cached?.district || activeArea || 'Bangladesh').trim();
+  const rawDistrict = (cached?.district || activeArea || 'Bangladesh').trim();
   const district = rawDistrict.length >= 2 ? rawDistrict : 'Bangladesh';
-  const area = (params.gps?.area || cached?.area || activeArea).trim();
+  const area = (cached?.area || activeArea).trim();
 
-  const latitude = params.gps?.latitude ?? cached?.latitude;
-  const longitude = params.gps?.longitude ?? cached?.longitude;
+  const latitude = cached?.latitude;
+  const longitude = cached?.longitude;
   const hasCoords =
     typeof latitude === 'number' &&
     typeof longitude === 'number' &&
     Number.isFinite(latitude) &&
     Number.isFinite(longitude);
 
-  let addressLine = (params.gps?.addressLine || cached?.addressLine || '').trim();
+  let addressLine = (cached?.addressLine || '').trim();
   if (addressLine.length < 4) {
     addressLine = hasCoords
       ? `GPS ${latitude.toFixed(5)}, ${longitude.toFixed(5)} (${activeArea})`
@@ -183,7 +141,8 @@ type PendingBuyTarget =
   | { kind: 'cart'; itemsSnapshot: { productId: string; quantity: number; variantId?: string }[] };
 
 export function QuickCommerceProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const { user, status, cartOwnerId, quickAccount } = useSession();
+  const { user, status, cartOwnerId } = useSession();
+  const { present: presentQuickAccount, dismiss: dismissQuickAccount } = useQuickAccount();
   const { area } = useArea();
   const { t } = useLanguage();
   const insets = useSafeAreaInsets();
@@ -191,17 +150,16 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
 
   const [quickViewProduct, setQuickViewProduct] = React.useState<Product | null>(null);
   const [miniCartOpen, setMiniCartOpen] = React.useState(false);
-  const [guestPromptTarget, setGuestPromptTarget] = React.useState<PendingBuyTarget | null>(null);
+  const [quickAccountOpen, setQuickAccountOpen] = React.useState(false);
   const [placingOrder, setPlacingOrder] = React.useState(false);
   const [orderError, setOrderError] = React.useState<string | null>(null);
   const [orderSuccessVisible, setOrderSuccessVisible] = React.useState(false);
   const [justAddedId, setJustAddedId] = React.useState<string | null>(null);
 
-  // Guest micro-modal state
-  const [guestPhone, setGuestPhone] = React.useState('');
-  const [guestPhoneError, setGuestPhoneError] = React.useState<string | null>(null);
-  const [gpsState, setGpsState] = React.useState<'idle' | 'fetching' | 'ready' | 'fallback'>('idle');
-  const gpsRef = React.useRef<GpsCoords | null>(null);
+  const userRef = React.useRef(user);
+  React.useEffect(() => {
+    userRef.current = user;
+  }, [user]);
 
   // Animations
   const [quickViewAnim] = React.useState(() => new Animated.Value(0));
@@ -287,18 +245,15 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
   // Hardware Back-Button Hijacking (STEP 3.2)
   React.useEffect(() => {
     const anyModalOpen =
-      Boolean(quickViewProduct) || miniCartOpen || Boolean(guestPromptTarget) || orderSuccessVisible;
+      Boolean(quickViewProduct) || miniCartOpen || quickAccountOpen || orderSuccessVisible;
     if (!anyModalOpen) return;
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (orderSuccessVisible) {
         return true;
       }
-      if (guestPromptTarget) {
-        if (!placingOrder) {
-          setGuestPromptTarget(null);
-          setGuestPhoneError(null);
-        }
+      if (quickAccountOpen) {
+        dismissQuickAccount();
         return true;
       }
       if (quickViewProduct) {
@@ -313,12 +268,12 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
     });
 
     return () => subscription.remove();
-  }, [quickViewProduct, miniCartOpen, guestPromptTarget, orderSuccessVisible, placingOrder, closeQuickView, closeMiniCart]);
+  }, [quickViewProduct, miniCartOpen, quickAccountOpen, orderSuccessVisible, dismissQuickAccount, closeQuickView, closeMiniCart]);
 
   // Show 1000ms order placed state, then auto-close & reset to Home
   const triggerOrderSuccess = React.useCallback(() => {
     setPlacingOrder(false);
-    setGuestPromptTarget(null);
+    setQuickAccountOpen(false);
     setQuickViewProduct(null);
     setMiniCartOpen(false);
     setOrderError(null);
@@ -346,7 +301,6 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
       activeUserName?: string;
       activeUserPhone?: string;
       target: PendingBuyTarget;
-      gps?: GpsCoords | null;
     }) => {
       setPlacingOrder(true);
       setOrderError(null);
@@ -365,13 +319,11 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
           }
         }
 
-        const resolvedGps = params.gps ?? gpsRef.current;
         const deliveryAddress = buildOneClickAddress({
           userId: params.activeUserId,
           userName: params.activeUserName,
           userPhone: params.activeUserPhone,
           areaName: area?.name,
-          gps: resolvedGps,
         });
 
         await orderService.createOrder(params.activeUserId, {
@@ -388,17 +340,31 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
     [area, triggerOrderSuccess],
   );
 
-  const openGuestMicroModal = React.useCallback((target: PendingBuyTarget) => {
-    setOrderError(null);
-    setGuestPhoneError(null);
-    setGuestPromptTarget(target);
-    setGpsState('fetching');
-    gpsRef.current = null;
-    void fetchBestEffortGps().then((coords) => {
-      gpsRef.current = coords;
-      setGpsState(coords ? 'ready' : 'fallback');
-    });
-  }, []);
+  const promptGuestQuickAccount = React.useCallback(
+    (target: PendingBuyTarget) => {
+      setOrderError(null);
+      setQuickAccountOpen(true);
+      presentQuickAccount({
+        onAuthenticated: () => {
+          setQuickAccountOpen(false);
+          void (async () => {
+            const activeUser = userRef.current ?? (await authService.getCurrentUser().catch(() => null));
+            if (!activeUser) return;
+            await executeOneClickOrder({
+              activeUserId: activeUser.id,
+              activeUserName: activeUser.name,
+              activeUserPhone: activeUser.phone,
+              target,
+            });
+          })();
+        },
+        onDismiss: () => {
+          setQuickAccountOpen(false);
+        },
+      });
+    },
+    [presentQuickAccount, executeOneClickOrder],
+  );
 
   const triggerBuyNowProduct = React.useCallback(
     (product: Product) => {
@@ -411,10 +377,10 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
           target,
         });
       } else {
-        openGuestMicroModal(target);
+        promptGuestQuickAccount(target);
       }
     },
-    [status, user, executeOneClickOrder, openGuestMicroModal],
+    [status, user, executeOneClickOrder, promptGuestQuickAccount],
   );
 
   const triggerBuyNowCart = React.useCallback(() => {
@@ -435,69 +401,9 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
         target,
       });
     } else {
-      openGuestMicroModal(target);
+      promptGuestQuickAccount(target);
     }
-  }, [cartOwnerId, status, user, executeOneClickOrder, openGuestMicroModal]);
-
-  const submitGuestOneClickOrder = React.useCallback(async () => {
-    if (!guestPromptTarget || placingOrder) return;
-    const trimmed = guestPhone.trim();
-    if (!PHONE_RE.test(trimmed)) {
-      setGuestPhoneError(t('phoneInvalidError'));
-      return;
-    }
-    setGuestPhoneError(null);
-    setPlacingOrder(true);
-    setOrderError(null);
-
-    try {
-      let coords = gpsRef.current;
-      if (gpsState === 'fetching') {
-        coords = await Promise.race([
-          fetchBestEffortGps(),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
-        ]);
-        gpsRef.current = coords;
-      }
-
-      const createdUser = await quickAccount(trimmed);
-
-      const addressToSave = buildOneClickAddress({
-        userId: createdUser.id,
-        userName: createdUser.name || trimmed,
-        userPhone: trimmed,
-        areaName: area?.name,
-        gps: coords,
-      });
-
-      void addressService
-        .add(createdUser.id, {
-          label: addressToSave.label,
-          recipientName: addressToSave.recipientName,
-          phone: addressToSave.phone,
-          division: addressToSave.division,
-          district: addressToSave.district,
-          area: addressToSave.area,
-          addressLine: addressToSave.addressLine,
-          postalCode: addressToSave.postalCode,
-          isDefault: true,
-          latitude: addressToSave.latitude,
-          longitude: addressToSave.longitude,
-        })
-        .catch(() => undefined);
-
-      await executeOneClickOrder({
-        activeUserId: createdUser.id,
-        activeUserName: createdUser.name || trimmed,
-        activeUserPhone: trimmed,
-        target: guestPromptTarget,
-        gps: coords,
-      });
-    } catch (err) {
-      setPlacingOrder(false);
-      setOrderError(err instanceof Error ? err.message : 'Unable to complete 1-click order.');
-    }
-  }, [guestPromptTarget, placingOrder, guestPhone, t, gpsState, quickAccount, area, executeOneClickOrder]);
+  }, [cartOwnerId, status, user, executeOneClickOrder, promptGuestQuickAccount]);
 
   const handleAddToCartFromQuickView = React.useCallback(
     (product: Product) => {
@@ -783,92 +689,6 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
                 </>
               )}
             </Animated.View>
-          </View>
-        ) : null}
-
-        {/* STEP 4.2: Guest 1-Click Phone Micro-Modal */}
-        {guestPromptTarget ? (
-          <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-            <Pressable
-              onPress={() => {
-                if (!placingOrder) {
-                  setGuestPromptTarget(null);
-                  setGuestPhoneError(null);
-                }
-              }}
-              accessibilityRole="button"
-              accessibilityLabel={t('close')}
-              style={[StyleSheet.absoluteFill, styles.backdropDark]}
-            />
-            <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-              style={styles.centerOverlay}
-              pointerEvents="box-none"
-            >
-              <View style={styles.guestMicroCard}>
-                <View style={styles.miniCartHeader}>
-                  <Text style={styles.miniCartTitle}>📞 {t('guestPhoneTitle')}</Text>
-                  <Pressable
-                    onPress={() => {
-                      if (!placingOrder) {
-                        setGuestPromptTarget(null);
-                        setGuestPhoneError(null);
-                      }
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel={t('close')}
-                    style={({ pressed }) => [styles.closeCircle, pressed && styles.pressed]}
-                  >
-                    <Text style={styles.closeCircleText}>✕</Text>
-                  </Pressable>
-                </View>
-
-                <Text style={styles.guestSubtitle}>{t('guestPhoneSubtitle')}</Text>
-
-                <View style={styles.gpsStatusPill}>
-                  <Text style={styles.gpsStatusText}>
-                    📍{' '}
-                    {gpsState === 'fetching'
-                      ? t('gpsFetching')
-                      : gpsState === 'ready'
-                        ? t('gpsReady')
-                        : t('gpsFallback')}
-                  </Text>
-                </View>
-
-                <Text style={styles.inputLabel}>{t('phoneNumberLabel')}</Text>
-                <TextInput
-                  value={guestPhone}
-                  onChangeText={(val) => {
-                    setGuestPhone(val);
-                    if (guestPhoneError) setGuestPhoneError(null);
-                  }}
-                  placeholder={t('phonePlaceholder')}
-                  placeholderTextColor={colors.textMuted}
-                  keyboardType="phone-pad"
-                  autoFocus
-                  returnKeyType="done"
-                  onSubmitEditing={() => void submitGuestOneClickOrder()}
-                  style={styles.phoneInput}
-                />
-                {guestPhoneError ? <Text style={styles.errorText}>{guestPhoneError}</Text> : null}
-                {orderError ? <Text style={styles.errorText}>{orderError}</Text> : null}
-
-                <Pressable
-                  onPress={() => void submitGuestOneClickOrder()}
-                  disabled={placingOrder}
-                  accessibilityRole="button"
-                  accessibilityLabel={t('confirmOrder')}
-                  style={({ pressed }) => [styles.miniCartBuyBtn, { marginTop: spacing.md }, pressed && styles.pressed]}
-                >
-                  {placingOrder ? (
-                    <ActivityIndicator size="small" color={colors.textInverse} />
-                  ) : (
-                    <Text style={styles.miniCartBuyBtnText}>⚡ {t('confirmOrder')}</Text>
-                  )}
-                </Pressable>
-              </View>
-            </KeyboardAvoidingView>
           </View>
         ) : null}
 
@@ -1179,51 +999,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: spacing.lg,
-  },
-  guestMicroCard: {
-    width: '92%',
-    backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...makeShadow(3),
-  },
-  guestSubtitle: {
-    fontSize: 13,
-    color: colors.textMuted,
-    marginBottom: spacing.sm,
-    lineHeight: 18,
-  },
-  gpsStatusPill: {
-    alignSelf: 'flex-start',
-    backgroundColor: colors.successSoft,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 4,
-    borderRadius: radius.pill,
-    marginBottom: spacing.md,
-  },
-  gpsStatusText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.success,
-  },
-  inputLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: 4,
-  },
-  phoneInput: {
-    height: 46,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.text,
-    backgroundColor: colors.surfaceMuted,
   },
   errorText: {
     fontSize: 12,
