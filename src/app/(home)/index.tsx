@@ -247,6 +247,12 @@ export default function HomeScreen(): React.JSX.Element {
     Keyboard.dismiss();
   }, []);
 
+  React.useEffect(() => {
+    if (searchFocused) {
+      searchInputRef.current?.focus();
+    }
+  }, [searchFocused]);
+
   const handleSelectKeyword = React.useCallback(
     (term: string) => {
       setSearchQuery(term);
@@ -275,38 +281,50 @@ export default function HomeScreen(): React.JSX.Element {
   const header = (
     <View style={[styles.header, { paddingTop: insets.top }, searchFocused && styles.headerElevated]}>
       <View style={styles.headerInner}>
-        {!searchFocused ? (
-          <>
-            <Logo size={30} />
-            <Pressable
-              onPress={openSelector}
-              accessibilityRole="button"
-              accessibilityLabel={`${t('yourArea')}: ${area?.name ?? ''}. ${t('tapToChange')}`}
-              style={({ pressed }) => [styles.areaChip, pressed && styles.pressed]}
-            >
-              <Text style={styles.areaPin}>📍</Text>
-              <Text style={styles.areaName} numberOfLines={1}>
-                {area?.name ?? ''}
-              </Text>
-              <Text style={styles.areaChange}>▾</Text>
-            </Pressable>
-          </>
-        ) : null}
+        <View
+          pointerEvents={searchFocused ? 'none' : 'auto'}
+          style={[styles.headerSideLeft, searchFocused && styles.headerItemHidden]}
+        >
+          <Logo size={30} />
+          <Pressable
+            onPress={openSelector}
+            accessibilityRole="button"
+            accessibilityLabel={`${t('yourArea')}: ${area?.name ?? ''}. ${t('tapToChange')}`}
+            style={({ pressed }) => [styles.areaChip, pressed && styles.pressed]}
+          >
+            <Text style={styles.areaPin}>📍</Text>
+            <Text style={styles.areaName} numberOfLines={1}>
+              {area?.name ?? ''}
+            </Text>
+            <Text style={styles.areaChange}>▾</Text>
+          </Pressable>
+        </View>
 
-        {/* STEP 1: Compact resting search bar that expands to full screen width onFocus */}
-        <View style={searchFocused ? styles.searchExpandedContainer : styles.searchCompactContainer}>
-          <SymbolView
-            name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
-            size={16}
-            weight={ICON_WEIGHT}
-            tintColor={searchFocused ? colors.primary : colors.textMuted}
-          />
+        {/* STEP 1 & STEP 2: Structurally static search bar that expands via style props onFocus */}
+        <View
+          style={[
+            styles.searchContainerBase,
+            searchFocused ? styles.searchExpandedContainer : styles.searchCompactContainer,
+          ]}
+        >
+          <Pressable
+            onPress={() => searchInputRef.current?.focus()}
+            hitSlop={4}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            <SymbolView
+              name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
+              size={16}
+              weight={ICON_WEIGHT}
+              tintColor={searchFocused ? colors.primary : colors.textMuted}
+            />
+          </Pressable>
           <TextInput
             ref={searchInputRef}
             value={searchQuery}
             onChangeText={setSearchQuery}
             onFocus={() => setSearchFocused(true)}
-            onBlur={() => setSearchFocused(false)}
             placeholder={t('searchPlaceholder')}
             placeholderTextColor={colors.textMuted}
             returnKeyType="search"
@@ -320,46 +338,51 @@ export default function HomeScreen(): React.JSX.Element {
             style={searchFocused ? styles.searchInputExpanded : styles.searchInputCompact}
             accessibilityLabel={t('search')}
           />
-          {searchQuery.length > 0 ? (
-            <Pressable
-              onPress={() => setSearchQuery('')}
-              accessibilityRole="button"
-              accessibilityLabel={t('clearHistory')}
-              style={styles.clearInputBtn}
-            >
-              <Text style={styles.clearInputText}>✕</Text>
-            </Pressable>
-          ) : null}
-          {searchFocused ? (
-            <Pressable
-              onPress={collapseSearch}
-              accessibilityRole="button"
-              accessibilityLabel={t('close')}
-              style={({ pressed }) => [styles.cancelSearchChip, pressed && styles.pressed]}
-            >
-              <Text style={styles.cancelSearchText}>{t('close')}</Text>
-            </Pressable>
-          ) : null}
+          <Pressable
+            onPress={() => setSearchQuery('')}
+            pointerEvents={searchQuery.length > 0 ? 'auto' : 'none'}
+            accessibilityRole="button"
+            accessibilityLabel={t('clearHistory')}
+            style={[styles.clearInputBtn, searchQuery.length === 0 && styles.controlHidden]}
+          >
+            <Text style={styles.clearInputText}>✕</Text>
+          </Pressable>
+          <Pressable
+            onPress={collapseSearch}
+            pointerEvents={searchFocused ? 'auto' : 'none'}
+            accessibilityRole="button"
+            accessibilityLabel={t('close')}
+            style={({ pressed }) => [
+              styles.cancelSearchChip,
+              !searchFocused && styles.controlHidden,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.cancelSearchText}>{t('close')}</Text>
+          </Pressable>
         </View>
 
-        {!searchFocused && user ? (
-          <Pressable
-            onPress={() => router.push('/notifications')}
-            accessibilityRole="button"
-            accessibilityLabel={t('notifications')}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
-          >
-            <SymbolView
-              name={{ ios: 'bell', android: 'notifications', web: 'notifications' }}
-              size={20}
-              weight={ICON_WEIGHT}
-              tintColor={colors.textInverse}
-            />
-            {notifCount > 0 ? <CountBadge count={notifCount} /> : null}
-          </Pressable>
-        ) : null}
+        <View
+          pointerEvents={searchFocused ? 'none' : 'auto'}
+          style={[styles.headerSideRight, searchFocused && styles.headerItemHidden]}
+        >
+          {user ? (
+            <Pressable
+              onPress={() => router.push('/notifications')}
+              accessibilityRole="button"
+              accessibilityLabel={t('notifications')}
+              style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+            >
+              <SymbolView
+                name={{ ios: 'bell', android: 'notifications', web: 'notifications' }}
+                size={20}
+                weight={ICON_WEIGHT}
+                tintColor={colors.textInverse}
+              />
+              {notifCount > 0 ? <CountBadge count={notifCount} /> : null}
+            </Pressable>
+          ) : null}
 
-        {!searchFocused ? (
           <Animated.View style={{ transform: [{ scale: cartBounceScale }] }}>
             <Pressable
               onPress={openMiniCart}
@@ -376,7 +399,7 @@ export default function HomeScreen(): React.JSX.Element {
               {cartCount > 0 ? <CountBadge count={cartCount} /> : null}
             </Pressable>
           </Animated.View>
-        ) : null}
+        </View>
       </View>
 
       {/* STEP 1: Search suggestions directly below the expanded search input */}
@@ -560,12 +583,35 @@ const styles = StyleSheet.create({
     elevation: 20,
   },
   headerInner: {
+    position: 'relative',
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
     paddingBottom: spacing.md,
+  },
+  headerSideLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  headerSideRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  headerItemHidden: {
+    opacity: 0,
+  },
+  controlHidden: {
+    width: 0,
+    height: 0,
+    opacity: 0,
+    overflow: 'hidden',
+    paddingHorizontal: 0,
+    paddingVertical: 0,
   },
   areaChip: {
     flex: 1,
@@ -591,26 +637,27 @@ const styles = StyleSheet.create({
     ...type.caption,
     color: colors.textMuted,
   },
-  searchCompactContainer: {
-    width: 112,
-    height: 40,
+  searchContainerBase: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: spacing.sm,
     backgroundColor: colors.surface,
     borderRadius: radius.pill,
   },
+  searchCompactContainer: {
+    width: 112,
+    height: 40,
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+  },
   searchExpandedContainer: {
-    flex: 1,
-    width: '100%',
-    height: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    top: spacing.sm,
+    height: 42,
     gap: spacing.xs,
     paddingHorizontal: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: radius.pill,
+    zIndex: 20,
     ...makeShadow(2),
   },
   searchInputCompact: {

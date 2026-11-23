@@ -29,18 +29,6 @@ import { makePaletteImage, resolveImage } from '@/utils/image';
 
 const SUCCESS_DURATION_MS = 1000;
 
-function resolveProductUnitLabel(product: Product, defaultLabel: string): string {
-  if (product.variants && product.variants.length > 0) {
-    const first = product.variants[0];
-    const attrs = Object.values(first.attributes ?? {}).filter(Boolean);
-    if (attrs.length > 0) return attrs.join(' · ');
-    if (first.sku) return first.sku;
-  }
-  const match = product.name.match(/(\d+(?:\.\d+)?\s*(?:kg|g|gm|ml|l|ltr|pc|pcs|কেজি|গ্রাম|লিটার|পিস))/i);
-  if (match) return match[1];
-  return defaultLabel;
-}
-
 function buildOneClickAddress(params: {
   userId: string;
   userName?: string;
@@ -580,17 +568,18 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
                 {/* Priority 2: Product Name */}
                 <Text style={styles.quickProductName}>{quickViewProduct.name}</Text>
 
-                {/* Priority 3: Unit / Weight (e.g., per-kg price) */}
-                <View style={styles.unitBadgeRow}>
-                  <View style={styles.unitBadge}>
-                    <Text style={styles.unitBadgeText}>
-                      ⚖️ {t('unitWeightLabel')}: {resolveProductUnitLabel(quickViewProduct, t('defaultUnitWeight'))}
-                    </Text>
+                {/* Priority 3: Dynamic Product Description */}
+                {quickViewProduct.description?.trim() ? (
+                  <View style={styles.descriptionBox}>
+                    <ScrollView
+                      style={styles.descriptionScroll}
+                      nestedScrollEnabled
+                      showsVerticalScrollIndicator={false}
+                    >
+                      <Text style={styles.descriptionText}>{quickViewProduct.description.trim()}</Text>
+                    </ScrollView>
                   </View>
-                  <Text style={styles.perUnitCaption}>
-                    {taka(effectivePrice(quickViewProduct))} ({t('perUnitPrice')})
-                  </Text>
-                </View>
+                ) : null}
 
                 {orderError ? <Text style={styles.errorText}>{orderError}</Text> : null}
               </ScrollView>
@@ -602,10 +591,19 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
                   disabled={placingOrder}
                   accessibilityRole="button"
                   accessibilityLabel={t('addToCart')}
-                  style={({ pressed }) => [styles.addToCartGreenBtn, pressed && styles.pressed]}
+                  style={({ pressed }) => [
+                    styles.addToCartSecondaryBtn,
+                    justAddedId === quickViewProduct.id && styles.addToCartSecondaryBtnActive,
+                    pressed && styles.pressed,
+                  ]}
                 >
-                  <Text style={styles.addToCartGreenBtnText}>
-                    {justAddedId === quickViewProduct.id ? t('addedToCart') : `🛒 ${t('addToCart')}`}
+                  <Text
+                    style={[
+                      styles.addToCartSecondaryBtnText,
+                      justAddedId === quickViewProduct.id && styles.addToCartSecondaryBtnTextActive,
+                    ]}
+                  >
+                    {justAddedId === quickViewProduct.id ? `✓ ${t('addedToCart')}` : t('addToCart')}
                   </Text>
                 </Pressable>
 
@@ -616,7 +614,7 @@ export function QuickCommerceProvider({ children }: { children: React.ReactNode 
                   accessibilityLabel={t('buyNow')}
                   style={({ pressed }) => [styles.buyNowBtn, pressed && styles.pressed]}
                 >
-                  <Text style={styles.buyNowBtnText}>⚡ {t('buyNow')}</Text>
+                  <Text style={styles.buyNowBtnText}>{t('buyNow')}</Text>
                 </Pressable>
               </View>
             </Animated.View>
@@ -859,70 +857,75 @@ const styles = StyleSheet.create({
     ...type.h2,
     color: colors.text,
   },
-  unitBadgeRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: 2,
-  },
-  unitBadge: {
-    backgroundColor: colors.primarySoft,
+  descriptionBox: {
+    marginTop: 4,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
     paddingHorizontal: spacing.md,
-    paddingVertical: 5,
-    borderRadius: radius.pill,
+    paddingVertical: spacing.sm,
   },
-  unitBadgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.primaryDark,
+  descriptionScroll: {
+    maxHeight: 92,
   },
-  perUnitCaption: {
-    fontSize: 12,
+  descriptionText: {
+    fontSize: 13,
+    lineHeight: 19,
     color: colors.textMuted,
-    fontWeight: '600',
   },
   quickActionsFooter: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
     alignItems: 'center',
     gap: spacing.sm,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
-    borderTopWidth: 1,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
+    backgroundColor: colors.surface,
   },
-  addToCartGreenBtn: {
+  addToCartSecondaryBtn: {
     flex: 1,
-    minHeight: 48,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.lg,
-    backgroundColor: '#15803D',
-    borderWidth: 1,
-    borderColor: '#166534',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  addToCartGreenBtnText: {
-    color: colors.textInverse,
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  buyNowBtn: {
-    minHeight: 48,
+    minHeight: 46,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
-    borderRadius: radius.lg,
-    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  addToCartSecondaryBtnActive: {
+    backgroundColor: colors.primarySoft,
+    borderColor: colors.primary,
+  },
+  addToCartSecondaryBtnText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: -0.1,
+  },
+  addToCartSecondaryBtnTextActive: {
+    color: colors.primary,
+  },
+  buyNowBtn: {
+    flex: 1,
+    minHeight: 46,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.text,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...makeShadow(2),
   },
   buyNowBtnText: {
     color: colors.textInverse,
     fontSize: 14,
-    fontWeight: '800',
+    fontWeight: '700',
+    letterSpacing: -0.1,
   },
   miniCartSheet: {
     position: 'absolute',
